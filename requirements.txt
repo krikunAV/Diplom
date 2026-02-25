@@ -1,0 +1,11 @@
+# Word templates + rendering
+docxtpl>=0.16.7
+python-docx>=1.1.2
+Jinja2>=3.1.2
+
+# Charts
+matplotlib>=3.7.0
+Pillow>=10.0.0
+
+# Excel (на будущее, у тебя в плане)
+openpyxl>=3.1.2

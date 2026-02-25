@@ -1,6 +1,8 @@
 # app/ui_tk/main_window_tk.py
 from __future__ import annotations
 from pathlib import Path
+from pathlib import Path
+from app.core.engine import compute_project, EngineConfig
 import json
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -29,7 +31,6 @@ class MainWindowTk(tk.Tk):
         self._build_table()
         self._build_project_list()
         self._build_buttons()
-
         self._on_scenario_change()
 
     # ---------------- UI blocks ----------------
@@ -134,12 +135,21 @@ class MainWindowTk(tk.Tk):
         ttk.Button(btns, text="Удалить выбранный", command=self.delete_selected_pouo).pack(fill="x", pady=2)
         ttk.Button(btns, text="Очистить все", command=self.clear_project).pack(fill="x", pady=2)
 
+    def calculate_only(self):
+        try:
+            project = self._compute_and_return_project()
+            msg = self._make_summary_text(project)
+            messagebox.showinfo("Результаты расчёта", msg if msg.strip() else "Нет данных.")
+        except Exception as e:
+            messagebox.showerror("Ошибка расчёта", str(e))
+
     def _build_buttons(self):
         frm = ttk.Frame(self)
         frm.pack(fill="x", padx=10, pady=(0, 10))
 
         ttk.Button(frm, text="Проверить данные", command=self.validate).pack(side="left")
         ttk.Button(frm, text="Показать JSON", command=self.show_json).pack(side="left", padx=8)
+        ttk.Button(frm, text="Рассчитать", command=self.calculate_only).pack(side="left", padx=8)
 
         if HAS_REPORT:
             ttk.Button(frm, text="Сформировать Word", command=self.build_word).pack(side="left", padx=8)
@@ -325,13 +335,14 @@ class MainWindowTk(tk.Tk):
         data = self.collect_data()
         messagebox.showinfo("JSON", json.dumps(data, ensure_ascii=False, indent=2))
 
-    # ---------------- Word (optional) ----------------
-    def build_word(self):
-        if not HAS_REPORT:
-            messagebox.showerror("Ошибка", "Word-генерация не подключена.")
-            return
-
+    def _build_project_from_selected(self):
+        """
+        Собирает Project из self.project_pouos (если пользователь добавлял сценарии),
+        иначе — из текущей формы (collect_data()).
+        Возвращает объект Project (dataclass).
+        """
         pouos_data = self.project_pouos[:] if self.project_pouos else [self.collect_data()]
+
         pouos = []
         for item in pouos_data:
             pouos.append(
@@ -347,6 +358,7 @@ class MainWindowTk(tk.Tk):
                             length_m=p["length_m"],
                             diameter_mm=p["diameter_mm"],
                             is_accident=p["is_accident"],
+                            pressure_kpa=0.0,  # если нужно — добавим ввод позже
                         )
                         for p in item["pipes"]
                     ],
@@ -360,18 +372,111 @@ class MainWindowTk(tk.Tk):
             address="(заполнить позже)",
             pouos=pouos
         )
+        return project
 
-        base = Path(__file__).resolve().parents[1]  # .../app
-        template_path = base / "report" / "templates" / "template.docx"
-        output_path = base.parents[0] / "out" / "Отчет_из_UI.docx"  # корень проекта/out
+    def _compute_and_return_project(self):
+        """
+        Собирает проект и прогоняет расчёты.
+        Возвращает project с заполненными results.
+        """
+        project = self._build_project_from_selected()
+        cfg = EngineConfig(make_charts=True)  # графики нужны для 7.1/7.2/7.3
+        compute_project(project, cfg)
+        return project
 
-        render_report(
-            template_path=str(template_path),
-            output_path=str(output_path),
-            project=project
-        )
-        messagebox.showinfo("Готово", "Создан файл: out/Отчет_из_UI.docx")
+    def _make_summary_text(self, project: Project) -> str:
+        """
+        Краткий отчёт для проверки в UI (без Word).
+        """
+        lines = []
+        for p in project.pouos:
+            lines.append(f"{p.code} — {p.title}")
 
+            meta = (p.results.get("meta") or {})
+            lines.append(f"  Топливо: {meta.get('fuel_title', p.fuel_id)}")
+            lines.append(f"  Тип: {'Помещение' if p.is_indoor else 'Открытая площадка'}")
+
+            if p.results.get("error"):
+                lines.append(f"  ❌ Ошибка: {p.results['error']}")
+                lines.append("")
+                continue
+
+            if "warnings" in p.results:
+                for w in p.results["warnings"]:
+                    lines.append(f"  ⚠ {w}")
+
+            # Release
+            rel = p.results.get("release")
+            if rel:
+                lines.append(f"  Аварийный участок: {rel.get('accident_pipe')}")
+                lines.append(f"  P, кПа: {rel.get('P_up_kpa')}, d, мм: {rel.get('d_hole_mm')}")
+                lines.append(f"  G, кг/с: {round(rel.get('G_kg_s', 0.0), 6)}")
+                lines.append(f"  m_release, кг: {round(rel.get('m_release_kg', 0.0), 6)}")
+                lines.append(f"  m_cloud, кг: {round(rel.get('m_cloud_kg', 0.0), 6)}")
+
+            # Fireball
+            fb = p.results.get("fireball")
+            if isinstance(fb, dict) and "params" in fb:
+                z = fb.get("zones") or []
+                lines.append("  Fireball зоны (q→r): " + ", ".join([f"{zz['q_thr_kw_m2']}→{zz['r_m']}" for zz in z]))
+            elif isinstance(fb, dict) and fb.get("skip_reason"):
+                lines.append(f"  Fireball: пропуск ({fb['skip_reason']})")
+
+            # Jet fire
+            jf = p.results.get("jet_fire")
+            if isinstance(jf, dict) and "params" in jf:
+                z = jf.get("zones") or []
+                lines.append("  JetFire зоны (q→r): " + ", ".join([f"{zz['q_thr_kw_m2']}→{zz['r_m']}" for zz in z]))
+
+            # TVS explosion
+            tvs = p.results.get("tvs_explosion")
+            if isinstance(tvs, dict) and "params" in tvs:
+                # возьмём максимум ΔP для контроля
+                table = tvs.get("table") or []
+                if table:
+                    max_row = max(table, key=lambda r: r.get("deltaP_Pa", 0.0))
+                    lines.append(
+                        f"  TVS: max ΔP={round(max_row.get('deltaP_Pa', 0.0) / 1000, 3)} кПа при r={max_row.get('r_m')} м")
+            elif isinstance(tvs, dict) and tvs.get("skip_reason"):
+                lines.append(f"  TVS: пропуск ({tvs['skip_reason']})")
+
+            lines.append("")  # пустая строка между ПОУО
+
+        return "\n".join(lines)
+
+    # ---------------- Word (optional) ----------------
+    def build_word(self):
+        if not HAS_REPORT:
+            messagebox.showerror("Ошибка", "Word-генерация не подключена.")
+            return
+
+        try:
+            project = self._compute_and_return_project()
+        except Exception as e:
+            messagebox.showerror("Ошибка расчёта", str(e))
+            return
+
+        # ✅ абсолютные пути (чтобы не ловить FileNotFoundError)
+        app_dir = Path(__file__).resolve().parents[1]  # .../app
+        root_dir = Path(__file__).resolve().parents[2]  # корень проекта
+
+        template_path = app_dir / "report" / "templates" / "template.docx"
+        if not template_path.exists():
+            # если используешь другой шаблон
+            template_path2 = app_dir / "report" / "templates" / "template2.docx"
+            template_path = template_path2
+
+        output_path = root_dir / "out" / "Отчет_из_UI.docx"
+
+        try:
+            render_report(
+                template_path=str(template_path),
+                output_path=str(output_path),
+                project=project
+            )
+            messagebox.showinfo("Готово", f"Создан файл:\n{output_path}")
+        except Exception as e:
+            messagebox.showerror("Ошибка Word", str(e))
     # ---------------- project list ops ----------------
     def add_pouo_to_project(self):
         data = self.collect_data()

@@ -1,26 +1,79 @@
-# Python
+# =========================
+# Python / Bytecode
+# =========================
 __pycache__/
 *.py[cod]
-*.pyd
+*$py.class
 
-# Virtual env
+# =========================
+# Virtual environments
+# =========================
 venv/
 .venv/
+ENV/
+env/
+.ENV/
+.python-version
 
-# IDE
-.idea/
+# =========================
+# Packaging / build
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+wheelhouse/
+MANIFEST
+
+# =========================
+# Test / coverage
+# =========================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.nox/
+.tox/
+
+# =========================
+# IDEs / editors
+# =========================
 .vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
 
-# Env / secrets
-.env
-.env.*
-*.key
-*.pem
-
-# OS / logs
+# =========================
+# OS files (Windows/macOS)
+# =========================
 .DS_Store
 Thumbs.db
-*.log
+ehthumbs.db
+Desktop.ini
 
-# Build / output
+# =========================
+# Logs / temp
+# =========================
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# =========================
+# Project outputs (generated)
+# =========================
 out/
+*.png
+
+# Если вдруг генерируешь docx в корне/других папках
+*_generated*.docx
+*_output*.docx
+
+# =========================
+# Do NOT ignore templates
+# =========================
+# Важно: шаблоны Word должны быть в репозитории,
+# поэтому НЕ добавляем правило вида "*.docx" глобально.
+# Файлы шаблонов храним в: app/report/templates/*.docx
