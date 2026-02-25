@@ -1,6 +1,6 @@
 # app/ui_tk/main_window_tk.py
 from __future__ import annotations
-
+from pathlib import Path
 import json
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -361,9 +361,13 @@ class MainWindowTk(tk.Tk):
             pouos=pouos
         )
 
+        base = Path(__file__).resolve().parents[1]  # .../app
+        template_path = base / "report" / "templates" / "template.docx"
+        output_path = base.parents[0] / "out" / "Отчет_из_UI.docx"  # корень проекта/out
+
         render_report(
-            template_path="app/report/templates/template.docx",
-            output_path="out/Отчет_из_UI.docx",
+            template_path=str(template_path),
+            output_path=str(output_path),
             project=project
         )
         messagebox.showinfo("Готово", "Создан файл: out/Отчет_из_UI.docx")
