@@ -1,291 +1,313 @@
 # app/core/engine.py
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
 from app.core.models import Project, POUO, PipeRow
 from app.core.fuels import get_fuel
 
-from app.core.calcs.jetfire import calc_jet_fire, Phase
-from app.core.calcs.fireball import calc_fireball
 from app.core.calcs.tvs_explosion import calc_tvs_explosion
 
 
-# -------------------- конфиг движка --------------------
-
 @dataclass
 class EngineConfig:
-    # окружающая среда
-    p_down_kpa: float = 101.3
-    t_air_K: float = 293.15
+    # Атмосфера/константы для ТВС
+    p0_pa: float = 101325.0
+    c0_m_s: float = 330.0
 
-    # коэффициенты истечения
-    Cd: float = 0.62
+    # Методика расхода (как в твоём отчёте)
+    psi_critical: float = 0.7
+    mu_orifice: float = 0.8
+    T_gas_K: float = 293.0
+    R0_natgas: float = 486.0      # Дж/(кг·К) как в отчёте
+    rho_natgas_n: float = 0.7     # кг/м3 как в отчёте (н.у.)
 
-    # коэффициент участия массы во взрыве (если нужно)
-    z_cloud: float = 0.5
+    # Коэффициент участия массы в облаке (Z)
+    Z_cloud: float = 0.5
 
-    # строить ли графики (tvs_explosion / jet_fire / fireball)
+    # ТВС режим/параметры как в отчёте
+    tvs_range_id: int = 5
+    tvs_sigma: float = 7.0
+    tvs_max_r_m: float = 200.0
+
+    # Энергетика как в отчёте: Eуд = β * 44e6
+    beta_natgas: float = 1.14
+    eud0_base_j_per_kg: float = 44e6
+
+    # Выбор класса/типа пространства (пока фиксируем как у тебя в примере)
+    fuel_class_default: int = 4
+    space_kind_default: str = "type3"
+
+    # Графики
     make_charts: bool = True
 
 
-# -------------------- вспомогательные функции --------------------
-
-def _infer_phase(fuel_id_norm: str) -> Phase:
-    """
-    Для расчёта струйного факела нужен тип истечения.
-    Пока делаем простое правило:
-    - natgas -> compressed_gas
-    - lpg    -> lpg_vapor
-    - diesel -> diesel_liquid
-    """
-    if fuel_id_norm == "natgas":
-        return "compressed_gas"
-    if fuel_id_norm == "lpg":
-        return "lpg_vapor"
-    return "diesel_liquid"
-
-
-def _tvs_defaults(fuel_id_norm: str) -> Dict[str, float]:
-    """
-    Минимальные справочные параметры для ТВС-расчёта (7.1 по методике).
-    Если пользователь не вводит Cg, range_id и т.п., используем эти значения.
-
-    При желании позже вынесем в fuels.py.
-    """
-    if fuel_id_norm == "natgas":
-        return {
-            "c_st": 9.36,      # %
-            "c_g": 5.0,        # % (если неизвестно, можно брать НКПР)
-            "sigma": 7.0,      # газовая смесь
-            "range_id": 3.0,   # дефлаграция 200-300 (часто в примерах)
-            "fuel_class": 2.0, # условно
-            "space_kind": 4.0, # слабозагромождённое
-        }
-    if fuel_id_norm == "lpg":
-        return {
-            "c_st": 3.97,      # % (пропан)
-            "c_g": 2.1,        # % (НКПР порядка 2.1)
-            "sigma": 7.0,
-            "range_id": 3.0,
-            "fuel_class": 2.0,
-            "space_kind": 3.0, # резервуарный парк/средняя загромождённость
-        }
-    # дизель (гетерогенное облако) – блок ТВС можно пока отключать
-    return {
-        "c_st": 0.0,
-        "c_g": 0.0,
-        "sigma": 4.0,
-        "range_id": 3.0,
-        "fuel_class": 3.0,
-        "space_kind": 3.0,
-    }
-
-
 def select_accident_pipe(p: POUO) -> Optional[PipeRow]:
-    """Возвращает аварийный участок, если отмечен; иначе первый."""
-    for pipe in p.pipes:
+    for pipe in (p.pipes or []):
         if getattr(pipe, "is_accident", False):
             return pipe
     return p.pipes[0] if p.pipes else None
 
 
 def _get_pressure_up_kpa(p: POUO, pipe: PipeRow) -> float:
-    """
-    Давление берём по правилу:
-    - если у трубы задано pressure_kpa > 0 -> используем его
-    - иначе -> inputs["P0_kpa"]
-    """
     p_pipe = float(getattr(pipe, "pressure_kpa", 0.0) or 0.0)
     if p_pipe > 0:
         return p_pipe
     return float(p.inputs.get("P0_kpa", 0.0) or 0.0)
 
 
-# -------------------- основной расчёт для одного сценария --------------------
+def _critical_mass_flow_natgas(*, P_r_pa: float, d_m: float, cfg: EngineConfig) -> Dict[str, float]:
+    """
+    По отчёту:
+      F = π d² / 4
+      Vr = R0*T/Pr
+      M = ψ * F * μ * sqrt(Pr / Vr)
+    """
+    F = math.pi * d_m * d_m / 4.0
+    Vr = cfg.R0_natgas * cfg.T_gas_K / max(P_r_pa, 1e-9)
+    M = cfg.psi_critical * F * cfg.mu_orifice * math.sqrt(max(P_r_pa, 0.0) / max(Vr, 1e-12))
+    return {"F_m2": F, "Vr_m3_kg": Vr, "M_kg_s": M}
+
+
+def _v2t_after_shutoff(*, P2_kpa: float, pipes: list[PipeRow]) -> Dict[str, float]:
+    """
+    По отчёту:
+      V2T = 0.01 * π * P2 * Σ(r² * L)
+    где:
+      P2 — кПа,
+      r — м (радиус трубы),
+      L — м
+    """
+    s = 0.0
+    for pr in pipes:
+        d_m = float(pr.diameter_mm) / 1000.0
+        r = d_m / 2.0
+        L = float(pr.length_m)
+        s += (r * r) * L
+
+    V2T = 0.01 * math.pi * float(P2_kpa) * s
+    return {"sum_r2L": s, "V2T_m3": V2T}
+
+
+def _cst_from_k(k: float) -> float:
+    # Cст = 100/(1 + 4.84*k)
+    return 100.0 / (1.0 + 4.84 * k)
+
+
+def _calc_jetfire_by_M(*, M_kg_s: float, K: float = 12.5, Ef_kw_m2: float = 80.0) -> Dict[str, Any]:
+    """
+    Факел как в отчёте:
+      Lf = K * M^0.4
+      Df = 0.15 * Lf
+    Дальше: τ, Fq, q и зоны по q=1.4/4.2/7/10.5
+    """
+    LF = K * (M_kg_s ** 0.4) if M_kg_s > 0 else 0.0
+    DF = 0.15 * LF if LF > 0 else 0.0
+
+    def tau(r: float) -> float:
+        inside = r * r + DF * DF - LF / 2.0
+        inside = max(0.0, inside)
+        return math.exp(-7e-4 * math.sqrt(inside))
+
+    def fq(r: float) -> float:
+        if LF <= 0:
+            return 0.0
+        a = (DF / LF) + 0.5
+        b = (r / LF)
+        return a / (4.0 * ((a * a + b * b) ** 1.5))
+
+    # сетка как в твоём графике/таблице
+    r_grid = [0, 1, 2, 3, 5] + list(range(10, 101, 5)) + [125, 150, 200]
+
+    rows = []
+    for r in r_grid:
+        t = tau(float(r))
+        f = fq(float(r))
+        q = Ef_kw_m2 * f * t
+        rows.append({"r_m": float(r), "tau": float(t), "Fq": float(f), "q_kw_m2": float(q)})
+
+    # зоны
+    thresholds = [1.4, 4.2, 7.0, 10.5]
+    zones = []
+    for thr in thresholds:
+        dist = None
+        for i in range(len(rows) - 1):
+            r0, q0 = rows[i]["r_m"], rows[i]["q_kw_m2"]
+            r1, q1 = rows[i + 1]["r_m"], rows[i + 1]["q_kw_m2"]
+            if (q0 - thr) == 0:
+                dist = r0
+                break
+            if (q0 - thr) * (q1 - thr) < 0:
+                tlin = (thr - q0) / (q1 - q0)
+                dist = r0 + tlin * (r1 - r0)
+                break
+        zones.append({"q_thr_kw_m2": thr, "r_m": None if dist is None else round(dist, 1)})
+
+    return {
+        "params": {"M_kg_s": float(M_kg_s), "LF_m": float(LF), "DF_m": float(DF), "Ef_kw_m2": float(Ef_kw_m2)},
+        "table": rows,
+        "zones": zones,
+    }
+
 
 def compute_for_pouo(p: POUO, cfg: EngineConfig | None = None) -> None:
-    """
-    Заполняет p.results структурой:
-      results["release"]
-      results["jet_fire"]
-      results["fireball"]
-      results["tvs_explosion"]
-
-    Indoor: не считаем fireball/jet_fire/tvs_explosion.
-    """
     cfg = cfg or EngineConfig()
+
+    # ✅ всегда считаем "с нуля"
+    p.results = {}
 
     fuel = get_fuel(p.fuel_id)
     fuel_id = fuel.id
 
-    # базовые входы
-    t_shutoff_s = float(p.inputs.get("t_shutoff_s", 0.0) or 0.0)
-
-    # всегда пишем “паспорт” сценария
-    p.results.setdefault("meta", {})
-    p.results["meta"].update({
+    # meta
+    p.results["meta"] = {
         "fuel_id_norm": fuel_id,
         "fuel_title": fuel.title,
         "is_indoor": bool(p.is_indoor),
         "code": p.code,
         "title": p.title,
-    })
+    }
 
-    # --- indoor: только сохраняем то, что нужно для будущих indoor-расчётов ---
+    # indoor: только сохраняем
     if p.is_indoor:
         p.results["room"] = {
             "V_room_m3": float(p.inputs.get("V_room_m3", 0.0) or 0.0),
             "P0_kpa": float(p.inputs.get("P0_kpa", 0.0) or 0.0),
-            "t_shutoff_s": t_shutoff_s,
+            "t_shutoff_s": float(p.inputs.get("t_shutoff_s", 0.0) or 0.0),
         }
         return
 
-    # --- outdoor: нужен аварийный участок ---
+    # если труб нет (POUO1 и т.п.)
+    if not p.pipes:
+        p.results["skip"] = "Нет труб для расчёта (сценарий без трубопроводов или не заполнено)."
+        return
+
     acc = select_accident_pipe(p)
     if acc is None:
-        p.results["error"] = "Нет труб для расчёта (p.pipes пуст)."
+        p.results["error"] = "Нет труб для расчёта."
         return
-
-    # если не отмечен аварийный — предупредим
-    if not getattr(acc, "is_accident", False):
-        p.results.setdefault("warnings", [])
-        p.results["warnings"].append("Аварийный участок не отмечен — выбран первый участок списка.")
 
     P_up_kpa = _get_pressure_up_kpa(p, acc)
-    d_hole_mm = float(acc.diameter_mm)  # толщины нет — используем диаметр как диаметр разрыва
+    t_shutoff_s = float(p.inputs.get("t_shutoff_s", 0.0) or 0.0)
 
-    if P_up_kpa <= 0:
-        p.results["error"] = "Не задано давление (inputs['P0_kpa'] или pipe.pressure_kpa)."
+    if P_up_kpa <= 0 or t_shutoff_s <= 0:
+        p.results["error"] = "Нужно задать P0_kpa и t_shutoff_s."
         return
-    if d_hole_mm <= 0:
+
+    d_m = float(acc.diameter_mm) / 1000.0
+    if d_m <= 0:
         p.results["error"] = "Некорректный диаметр аварийного участка."
         return
 
-    phase = _infer_phase(fuel_id)
+    # ---------------- NATGAS: как в отчёте ----------------
+    if fuel_id == "natgas":
+        P_r_pa = float(P_up_kpa) * 1000.0
+        mf = _critical_mass_flow_natgas(P_r_pa=P_r_pa, d_m=d_m, cfg=cfg)
+        M_kg_s = float(mf["M_kg_s"])
 
-    # ---------- 1) RELEASE (G и масса выброса) ----------
-    # G берём из jet_fire (он внутри считает расход)
-    jf = calc_jet_fire(
-        fuel_id=fuel_id,
-        fuel_title=fuel.title,
-        phase=phase,
-        P_up_kpa=P_up_kpa,
-        d_inner_mm=d_hole_mm,  # тут это диаметр отверстия/разрыва
-        hole_mode="full_bore",
-        P_down_kpa=cfg.p_down_kpa,
-        T_K=cfg.t_air_K,
-        Cd=cfg.Cd,
-        Ef_kw_m2=80.0,  # как в примере/шаблоне; потом уточним по топливу
-        chart_name=f"jetfire_{p.code}.png".replace(" ", "_"),
-    )
+        # масса до отсечки
+        M1T = M_kg_s * t_shutoff_s
 
-    G = float(jf.G_kg_s)
-    m_release = G * t_shutoff_s if t_shutoff_s > 0 else 0.0
-    m_cloud = cfg.z_cloud * m_release
+        # объём/масса после отсечки
+        v2 = _v2t_after_shutoff(P2_kpa=P_up_kpa, pipes=p.pipes)
+        V2T = float(v2["V2T_m3"])
+        M2T = V2T * cfg.rho_natgas_n
 
-    p.results["release"] = {
-        "accident_pipe": acc.name,
-        "P_up_kpa": P_up_kpa,
-        "d_hole_mm": d_hole_mm,
-        "Cd": cfg.Cd,
-        "T_air_K": cfg.t_air_K,
-        "P_down_kpa": cfg.p_down_kpa,
-        "G_kg_s": G,
-        "t_shutoff_s": t_shutoff_s,
-        "m_release_kg": m_release,
-        "z_cloud": cfg.z_cloud,
-        "m_cloud_kg": m_cloud,
-    }
+        M2_total = M1T + M2T
+        mr = M2_total * cfg.Z_cloud
 
-    # ---------- 2) JET FIRE ----------
-    p.results["jet_fire"] = {
-        "params": {
-            "G_kg_s": jf.G_kg_s,
-            "LF_m": jf.LF_m,
-            "DF_m": jf.DF_m,
-            "Ef_kw_m2": jf.Ef_kw_m2,
-            "phase": jf.phase,
-            "d_hole_mm": jf.d_hole_mm,
-        },
-        "table": jf.table_rows,
-        "zones": jf.zones_rows,
-        "chart_path": jf.chart_path,
-    }
+        # энергия как в отчёте
+        Eud = cfg.beta_natgas * cfg.eud0_base_j_per_kg
 
-    # ---------- 3) FIREBALL (масса = выброс до отсечки) ----------
-    if m_release > 0:
-        fb = calc_fireball(
-            fuel_id=fuel_id,
-            fuel_title=fuel.title,
-            m_kg=m_release,
-            chart_name=f"fireball_{p.code}.png".replace(" ", "_"),
-        )
-        p.results["fireball"] = {
-            "params": {
-                "m_kg": fb.m_kg,
-                "Ds_m": fb.Ds_m,
-                "H_m": fb.H_m,
-                "ts_s": fb.ts_s,
-                "Ef_kw_m2": fb.Ef_kw_m2,
-            },
-            "table": fb.table_rows,
-            "zones": fb.zones_rows,
-            "chart_path": fb.chart_path,
+        # как в отчёте: k=2, Cg=Cst
+        k_stoich = 2.0
+        Cst = _cst_from_k(k_stoich)
+        Cg = Cst
+
+        # release — + совместимость со старой сводкой
+        p.results["release"] = {
+            # "как в отчёте"
+            "accident_pipe": acc.name,
+            "P2_kpa": float(P_up_kpa),
+            "d_m": float(d_m),
+            "F_m2": float(mf["F_m2"]),
+            "R0_J_kgK": float(cfg.R0_natgas),
+            "T_K": float(cfg.T_gas_K),
+            "Vr_m3_kg": float(mf["Vr_m3_kg"]),
+            "psi": float(cfg.psi_critical),
+            "mu": float(cfg.mu_orifice),
+            "M_kg_s": float(M_kg_s),
+            "t_shutoff_s": float(t_shutoff_s),
+            "M1T_kg": float(M1T),
+            "sum_r2L": float(v2["sum_r2L"]),
+            "V2T_m3": float(V2T),
+            "rho_n_kg_m3": float(cfg.rho_natgas_n),
+            "M2T_kg": float(M2T),
+            "M2_total_kg": float(M2_total),
+            "Z": float(cfg.Z_cloud),
+            "mr_kg": float(mr),
+            "beta": float(cfg.beta_natgas),
+            "Eud_J_kg": float(Eud),
+            "k_stoich": float(k_stoich),
+            "Cst_vol_percent": float(Cst),
+            "Cg_vol_percent": float(Cg),
+
+            # "совместимость" со старой сводкой UI
+            "P_up_kpa": float(P_up_kpa),
+            "d_hole_mm": float(acc.diameter_mm),
+            "G_kg_s": float(M_kg_s),          # в твоём отчёте расход обозначен M, но это тот же кг/с
+            "m_release_kg": float(M1T),       # масса до отсечки
+            "m_cloud_kg": float(mr),          # масса, участвующая во взрыве (облако)
         }
-    else:
-        p.results["fireball"] = {"skip_reason": "m_release_kg=0 (нет времени отсечки или G=0)"}
 
-    # ---------- 4) TVS EXPLOSION (ударная волна) ----------
-    # Делаем только для natgas/lpg (для дизеля пока пропускаем)
-    if fuel_id not in {"natgas", "lpg"}:
-        p.results["tvs_explosion"] = {"skip_reason": "Для данного топлива ТВС-взрыв не рассчитывается (пока)."}
+        # jet fire по M из отчёта
+        p.results["jet_fire"] = _calc_jetfire_by_M(M_kg_s=M_kg_s)
+
+        # огненный шар для natgas обычно не считают
+        p.results["fireball"] = {"skip_reason": "Для природного газа (газопровод) огненный шар обычно не рассчитывают."}
+
+        # ТВС-взрыв
+        tvs = calc_tvs_explosion(
+            m_g_kg=mr,
+            q_g_j_per_kg=Eud,
+            c_g=Cg,
+            c_st=Cst,
+            fuel_class=cfg.fuel_class_default,
+            space_kind=cfg.space_kind_default,
+            range_id=cfg.tvs_range_id,
+            sigma=cfg.tvs_sigma,
+            p0_pa=cfg.p0_pa,
+            c0_m_s=cfg.c0_m_s,
+            max_r_m=cfg.tvs_max_r_m,
+            make_charts=cfg.make_charts,
+            chart_dp_path=f"out/charts/tvs_dp_{p.code}.png".replace(" ", "_"),
+            chart_imp_path=f"out/charts/tvs_imp_{p.code}.png".replace(" ", "_"),
+        )
+
+        # добавим ΔP в кПа для удобства графика/отчёта
+        table = []
+        for row in tvs.table_rows:
+            rr = dict(row)
+            rr["deltaP_kPa"] = rr["deltaP_Pa"] / 1000.0
+            table.append(rr)
+
+        p.results["tvs_explosion"] = {
+            "params": tvs.params,
+            "table": table,
+            "chart_dp_path": tvs.chart_dp_path,
+            "chart_imp_path": tvs.chart_imp_path,
+        }
+
         return
 
-    # параметры ТВС: можно вводить в UI, иначе дефолты
-    dflt = _tvs_defaults(fuel_id)
+    # ---------------- остальные топлива пока пропускаем ----------------
+    p.results["release"] = {"skip_reason": "Эта часть методики сейчас реализована только для природного газа (natgas)."}
+    p.results["jet_fire"] = {"skip_reason": "Будет реализовано по методике для выбранного топлива."}
+    p.results["fireball"] = {"skip_reason": "Будет реализовано по методике для выбранного топлива."}
+    p.results["tvs_explosion"] = {"skip_reason": "ТВС-взрыв пока реализован для natgas."}
 
-    c_g = float(p.inputs.get("C_g_vol_percent", dflt["c_g"]) or dflt["c_g"])
-    c_st = float(p.inputs.get("C_st_vol_percent", dflt["c_st"]) or dflt["c_st"])
-    sigma = float(p.inputs.get("sigma", dflt["sigma"]) or dflt["sigma"])
-    range_id = int(float(p.inputs.get("range_id", dflt["range_id"]) or dflt["range_id"]))
-
-    # теплота сгорания (берём из fuels.py)
-    q_g = float(getattr(fuel, "eud0_j_per_kg", 0.0) or 0.0)
-    if q_g <= 0:
-        # запасной дефолт
-        q_g = 5.0e7 if fuel_id == "natgas" else 4.6e7
-
-    # масса в облаке, участвующая во взрыве
-    if m_cloud <= 0:
-        p.results["tvs_explosion"] = {"skip_reason": "m_cloud_kg=0 (нет времени отсечки или G=0)"}
-        return
-
-    tvs = calc_tvs_explosion(
-        m_g_kg=m_cloud,
-        q_g_j_per_kg=q_g,
-        c_g=c_g,
-        c_st=c_st,
-        fuel_class=2,                 # можно позже сделать ввод
-        space_kind="type4",           # можно позже сделать ввод
-        range_id=range_id,            # 1..6
-        sigma=sigma,
-        max_r_m=float(p.inputs.get("tvs_r_max_m", 200.0) or 200.0),
-        make_charts=cfg.make_charts,
-        chart_dp_path=f"out/charts/tvs_dp_{p.code}.png".replace(" ", "_"),
-        chart_imp_path=f"out/charts/tvs_imp_{p.code}.png".replace(" ", "_"),
-    )
-
-    p.results["tvs_explosion"] = {
-        "params": tvs.params,
-        "table": tvs.table_rows,
-        "chart_dp_path": tvs.chart_dp_path,
-        "chart_imp_path": tvs.chart_imp_path,
-    }
-
-
-# -------------------- расчёт проекта --------------------
 
 def compute_project(project: Project, cfg: EngineConfig | None = None) -> None:
     cfg = cfg or EngineConfig()

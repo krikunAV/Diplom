@@ -405,14 +405,21 @@ class MainWindowTk(tk.Tk):
                 for w in p.results["warnings"]:
                     lines.append(f"  ⚠ {w}")
 
-            # Release
+            # Release (новые ключи из engine.py)
             rel = p.results.get("release")
-            if rel:
+            if isinstance(rel, dict) and "P2_kpa" in rel:
+                P2 = rel.get("P2_kpa")
+                d_mm = round(float(rel.get("d_m", 0.0)) * 1000.0, 1) if rel.get("d_m") is not None else None
+
                 lines.append(f"  Аварийный участок: {rel.get('accident_pipe')}")
-                lines.append(f"  P, кПа: {rel.get('P_up_kpa')}, d, мм: {rel.get('d_hole_mm')}")
-                lines.append(f"  G, кг/с: {round(rel.get('G_kg_s', 0.0), 6)}")
-                lines.append(f"  m_release, кг: {round(rel.get('m_release_kg', 0.0), 6)}")
-                lines.append(f"  m_cloud, кг: {round(rel.get('m_cloud_kg', 0.0), 6)}")
+                lines.append(f"  P2, кПа: {P2}, d, мм: {d_mm}")
+
+                lines.append(f"  M (кг/с): {round(float(rel.get('M_kg_s', 0.0)), 4)}")
+                lines.append(f"  M1T (кг): {round(float(rel.get('M1T_kg', 0.0)), 2)}")
+                lines.append(f"  V2T (м³): {round(float(rel.get('V2T_m3', 0.0)), 2)}")
+                lines.append(f"  M2T (кг): {round(float(rel.get('M2T_kg', 0.0)), 2)}")
+                lines.append(f"  M2 total (кг): {round(float(rel.get('M2_total_kg', 0.0)), 2)}")
+                lines.append(f"  mr = M2*Z (кг): {round(float(rel.get('mr_kg', 0.0)), 2)}")
 
             # Fireball
             fb = p.results.get("fireball")
