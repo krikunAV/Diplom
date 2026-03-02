@@ -1,4 +1,4 @@
-# app/core/engine.py
+# app/core/engine.pyВ
 from __future__ import annotations
 
 import math
@@ -7,8 +7,7 @@ from typing import Optional, Dict, Any
 
 from app.core.models import Project, POUO, PipeRow
 from app.core.fuels import get_fuel
-
-from app.core.calcs.tvs_explosion import calc_tvs_explosion
+from app.core.calcs.tvs_pipeline import calc_tvs_pipeline
 
 
 @dataclass
