@@ -77,7 +77,7 @@ class ZonesResult:
     params: Dict[str, float]
 
 
-def run_probit_zones(ctx: CalculationContext) -> ZonesResult:
+def run_probit_zones(ctx: CalculationContext):
     """
     Block 3: Радиусы зон (без мат.ущерба и жертв).
 

@@ -1,12 +1,11 @@
+# app/core/calcs/tvs/shockwave.py
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Tuple, Literal, Dict, Any
+from typing import List, Tuple, Dict, Any
 
 from app.core.context import CalculationContext
-
-ExplosionMode = Literal["detonation", "deflagration"]
 
 
 def _safe_ln(x: float) -> float:
@@ -14,12 +13,6 @@ def _safe_ln(x: float) -> float:
 
 
 def _detonation_px_ix(Rx: float) -> Tuple[float, float]:
-    """
-    Детонационная ветка (Px2, Ix2) по методике (шаблон 412).
-    Ограничения:
-      - Px2: если Rx < 0.2 => Px2 = 18
-      - Ix2: если Rx < 0.2 => для Ix используем Rx = 0.14
-    """
     if Rx < 0.2:
         Px2 = 18.0
         Rx_for_I = 0.14
@@ -36,14 +29,10 @@ def _detonation_px_ix(Rx: float) -> Tuple[float, float]:
 
 
 def _deflagration_px_ix(Rx: float, Vg: float, C0: float, sigma: float) -> Tuple[float, float]:
-    """
-    Дефлаграционная ветка (Px1, Ix1) по методике (шаблон 412).
-    Ограничение: если Rx < 0.34, подставляем Rx=0.34.
-    """
     Rx_eff = max(Rx, 0.34)
 
     ksig = (sigma - 1.0) / sigma
-    a = (Vg / C0)
+    a = Vg / C0
 
     Px1 = (a ** 2) * ksig * (0.83 / Rx_eff - 0.14 / (Rx_eff ** 2))
     corr = 1.0 - 0.4 * (sigma - 1.0) * Vg / (sigma * C0)
@@ -55,10 +44,6 @@ def _deflagration_px_ix(Rx: float, Vg: float, C0: float, sigma: float) -> Tuple[
 
 
 def _choose_vg(range_id: int, m_cloud_kg: float) -> float:
-    """
-    Скорость фронта пламени Vg (м/с) по диапазону 1..6.
-    Для 5/6: Vg = k * M^(1/6).
-    """
     if range_id == 1:
         return 500.0
     if range_id == 2:
@@ -75,7 +60,7 @@ def _choose_vg(range_id: int, m_cloud_kg: float) -> float:
 
 
 @dataclass
-class Shockwave412Result:
+class ShockwaveResult:
     r_grid_m: List[float]
     Rx: List[float]
     Px: List[float]
@@ -85,20 +70,7 @@ class Shockwave412Result:
     params: Dict[str, Any]
 
 
-def run_shockwave(ctx: CalculationContext) -> Shockwave412Result:
-    """
-    Block 2 (412): E -> Rx -> Px/Ix -> ΔP/I+
-    Требует:
-
-      ctx.intermediate["E_J"]
-      ctx.intermediate["m_cloud_kg"] (для выбора Vg при дефлаграции)
-    Использует:
-      inputs.env.P0_Pa, inputs.env.C0_mps, inputs.substance.sigma
-      inputs.shockwave.r_grid_m, inputs.shockwave.explosion_mode
-    Опционально:
-      inputs.shockwave.range_id (1..6) — для дефлаграции
-    """
-
+def run_shockwave(ctx: CalculationContext) -> ShockwaveResult:
     inp = ctx.inputs
     env = inp["env"]
     subst = inp["substance"]
@@ -108,18 +80,16 @@ def run_shockwave(ctx: CalculationContext) -> Shockwave412Result:
     C0 = float(env["C0_mps"])
     sigma = float(subst["sigma"])
 
-    mode: ExplosionMode = sh["explosion_mode"]
+    mode = sh["explosion_mode"]
     r_grid = [float(x) for x in sh["r_grid_m"]]
 
     E = float(ctx.intermediate["E_J"])
     if E <= 0:
-        raise ValueError("E_J must be > 0 (check Block 1)")
+        raise ValueError("E_J must be > 0")
 
-    # масштаб длины (E/P0)^(1/3)
     L_scale = (E / P0) ** (1.0 / 3.0)
 
-    # если дефлаграция — нужен Vg
-    range_id = int(sh.get("range_id", 3))  # по умолчанию 3
+    range_id = int(sh.get("range_id", 3))
     m_cloud = float(ctx.intermediate.get("m_cloud_kg", 0.0))
     Vg = _choose_vg(range_id, m_cloud) if mode == "deflagration" else None
 
@@ -130,13 +100,11 @@ def run_shockwave(ctx: CalculationContext) -> Shockwave412Result:
     Iplus_list: List[float] = []
 
     for r in r_grid:
-        # Rx = r / L_scale (для r=0 подставим маленькое число)
         Rx = (r / L_scale) if r > 0 else 1e-12
 
         if mode == "detonation":
             Px, Ix = _detonation_px_ix(Rx)
         else:
-            # дефлаграция
             Px, Ix = _deflagration_px_ix(Rx, float(Vg), C0, sigma)
 
         dP = Px * P0
@@ -148,7 +116,6 @@ def run_shockwave(ctx: CalculationContext) -> Shockwave412Result:
         dP_list.append(float(dP))
         Iplus_list.append(float(Iplus))
 
-    # записываем в контекст (воспроизводимость)
     ctx.intermediate["L_scale_m"] = float(L_scale)
     ctx.intermediate["Rx"] = Rx_list
     ctx.intermediate["Px"] = Px_list
@@ -158,26 +125,23 @@ def run_shockwave(ctx: CalculationContext) -> Shockwave412Result:
     ctx.results["dP_Pa"] = dP_list
     ctx.results["Iplus_Pa_s"] = Iplus_list
 
-    # параметры расчёта
-    params = {
-        "mode": mode,
-        "range_id": range_id if mode == "deflagration" else None,
-        "Vg_m_s": float(Vg) if Vg is not None else None,
-        "P0_Pa": P0,
-        "C0_mps": C0,
-        "sigma": sigma,
-        "E_J": E,
-        "L_scale_m": float(L_scale),
-    }
+    ctx.log(f"[shockwave] mode={mode}, E={E:.6g}, L_scale={L_scale:.6g}")
 
-    ctx.log(f"[412] mode={mode}, E={E:.6g} J, L_scale={L_scale:.6g} m")
-
-    return Shockwave412Result(
+    return ShockwaveResult(
         r_grid_m=r_grid,
         Rx=Rx_list,
         Px=Px_list,
         Ix=Ix_list,
         dP_Pa=dP_list,
         Iplus_Pa_s=Iplus_list,
-        params=params,
+        params={
+            "mode": mode,
+            "range_id": range_id if mode == "deflagration" else None,
+            "Vg_m_s": float(Vg) if Vg is not None else None,
+            "P0_Pa": P0,
+            "C0_mps": C0,
+            "sigma": sigma,
+            "E_J": E,
+            "L_scale_m": float(L_scale),
+        },
     )

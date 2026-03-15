@@ -1,7 +1,6 @@
 # app/ui_tk/main_window_tk.py
 from __future__ import annotations
 from pathlib import Path
-from pathlib import Path
 from app.core.engine import compute_project, EngineConfig
 import json
 import tkinter as tk
@@ -25,7 +24,6 @@ class MainWindowTk(tk.Tk):
         self.geometry("1240x800")
 
         self.project_pouos = []
-
         self._build_top()
         self._build_room_block()
         self._build_table()
@@ -387,8 +385,11 @@ class MainWindowTk(tk.Tk):
     def _make_summary_text(self, project: Project) -> str:
         """
         Краткий отчёт для проверки в UI (без Word).
+        Адаптирован под новую архитектуру:
+          release + tvs_pipeline + jet_fire + fireball
         """
         lines = []
+
         for p in project.pouos:
             lines.append(f"{p.code} — {p.title}")
 
@@ -405,52 +406,96 @@ class MainWindowTk(tk.Tk):
                 for w in p.results["warnings"]:
                     lines.append(f"  ⚠ {w}")
 
-            # Release (новые ключи из engine.py)
+            # ---------------- Release ----------------
             rel = p.results.get("release")
-            if isinstance(rel, dict) and "P2_kpa" in rel:
-                P2 = rel.get("P2_kpa")
-                d_mm = round(float(rel.get("d_m", 0.0)) * 1000.0, 1) if rel.get("d_m") is not None else None
+            if isinstance(rel, dict) and ("P2_kpa" in rel or "P_up_kpa" in rel):
+                P2 = rel.get("P2_kpa", rel.get("P_up_kpa"))
+                d_mm = rel.get("d_hole_mm")
+                if d_mm is None and rel.get("d_m") is not None:
+                    d_mm = round(float(rel.get("d_m", 0.0)) * 1000.0, 1)
 
                 lines.append(f"  Аварийный участок: {rel.get('accident_pipe')}")
                 lines.append(f"  P2, кПа: {P2}, d, мм: {d_mm}")
 
-                lines.append(f"  M (кг/с): {round(float(rel.get('M_kg_s', 0.0)), 4)}")
-                lines.append(f"  M1T (кг): {round(float(rel.get('M1T_kg', 0.0)), 2)}")
-                lines.append(f"  V2T (м³): {round(float(rel.get('V2T_m3', 0.0)), 2)}")
-                lines.append(f"  M2T (кг): {round(float(rel.get('M2T_kg', 0.0)), 2)}")
-                lines.append(f"  M2 total (кг): {round(float(rel.get('M2_total_kg', 0.0)), 2)}")
-                lines.append(f"  mr = M2*Z (кг): {round(float(rel.get('mr_kg', 0.0)), 2)}")
+                # Новый формат
+                m_dot = rel.get("m_dot_kg_s", rel.get("G_kg_s", 0.0))
+                lines.append(f"  M (кг/с): {round(float(m_dot or 0.0), 4)}")
+                lines.append(f"  M1T (кг): {round(float(rel.get('M1T_kg', 0.0) or 0.0), 2)}")
+                lines.append(f"  V2T (м³): {round(float(rel.get('V2T_m3', 0.0) or 0.0), 2)}")
+                lines.append(f"  M2T (кг): {round(float(rel.get('M2T_kg', 0.0) or 0.0), 2)}")
+                lines.append(
+                    f"  Mg total (кг): {round(float(rel.get('M2_total_kg', rel.get('Mg_kg', 0.0)) or 0.0), 2)}")
+                lines.append(f"  m облака (кг): {round(float(rel.get('mr_kg', rel.get('m_cloud_kg', 0.0)) or 0.0), 2)}")
 
-            # Fireball
+                if rel.get("E_J") is not None:
+                    lines.append(f"  Энергозапас E (Дж): {round(float(rel.get('E_J', 0.0)), 2)}")
+
+            # ---------------- Fireball ----------------
             fb = p.results.get("fireball")
             if isinstance(fb, dict) and "params" in fb:
                 z = fb.get("zones") or []
-                lines.append("  Fireball зоны (q→r): " + ", ".join([f"{zz['q_thr_kw_m2']}→{zz['r_m']}" for zz in z]))
+                lines.append("  Fireball зоны (q→r): " + ", ".join(
+                    [f"{zz['q_thr_kw_m2']}→{zz['r_m']}" for zz in z]
+                ))
             elif isinstance(fb, dict) and fb.get("skip_reason"):
                 lines.append(f"  Fireball: пропуск ({fb['skip_reason']})")
 
-            # Jet fire
+            # ---------------- Jet fire ----------------
             jf = p.results.get("jet_fire")
             if isinstance(jf, dict) and "params" in jf:
                 z = jf.get("zones") or []
-                lines.append("  JetFire зоны (q→r): " + ", ".join([f"{zz['q_thr_kw_m2']}→{zz['r_m']}" for zz in z]))
+                lines.append("  JetFire зоны (q→r): " + ", ".join(
+                    [f"{zz['q_thr_kw_m2']}→{zz['r_m']}" for zz in z]
+                ))
+            elif isinstance(jf, dict) and jf.get("skip_reason"):
+                lines.append(f"  JetFire: пропуск ({jf['skip_reason']})")
 
-            # TVS explosion
+            # ---------------- TVS explosion ----------------
             tvs = p.results.get("tvs_explosion")
-            if isinstance(tvs, dict) and "params" in tvs:
-                # возьмём максимум ΔP для контроля
+            if isinstance(tvs, dict):
                 table = tvs.get("table") or []
+                results = tvs.get("results") or {}
+                intermediate = tvs.get("intermediate") or {}
+
                 if table:
                     max_row = max(table, key=lambda r: r.get("deltaP_Pa", 0.0))
                     lines.append(
-                        f"  TVS: max ΔP={round(max_row.get('deltaP_Pa', 0.0) / 1000, 3)} кПа при r={max_row.get('r_m')} м")
-            elif isinstance(tvs, dict) and tvs.get("skip_reason"):
-                lines.append(f"  TVS: пропуск ({tvs['skip_reason']})")
+                        f"  TVS: max ΔP = {round(max_row.get('deltaP_Pa', 0.0) / 1000, 3)} кПа "
+                        f"при r = {max_row.get('r_m')} м"
+                    )
 
-            lines.append("")  # пустая строка между ПОУО
+                if intermediate.get("E_J") is not None:
+                    lines.append(f"  TVS E (Дж): {round(float(intermediate.get('E_J', 0.0)), 2)}")
+
+                zones_glass = results.get("zones_glass")
+                if zones_glass:
+                    pretty = ", ".join([f"{k}→{v}" for k, v in zones_glass.items()])
+                    lines.append(f"  TVS glass zones: {pretty}")
+
+                zones_people = results.get("zones_people")
+                if zones_people:
+                    pretty = ", ".join([f"{k}→{v}" for k, v in zones_people.items()])
+                    lines.append(f"  TVS people zones: {pretty}")
+
+                zones_buildings = results.get("zones_buildings")
+                if zones_buildings:
+                    pretty_parts = []
+                    for k, v in zones_buildings.items():
+                        if isinstance(v, (list, tuple)) and len(v) == 2:
+                            r1, r2 = v
+                            r1s = "0" if r1 is None else str(round(float(r1), 2))
+                            r2s = "не найдено" if r2 is None else str(round(float(r2), 2))
+                            pretty_parts.append(f"{k}: {r1s}–{r2s} м")
+                        else:
+                            pretty_parts.append(f"{k}: {v}")
+                    lines.append(f"  TVS building zones: {', '.join(pretty_parts)}")
+
+                if tvs.get("skip_reason"):
+                    lines.append(f"  TVS: пропуск ({tvs['skip_reason']})")
+
+            lines.append("")
 
         return "\n".join(lines)
-
     # ---------------- Word (optional) ----------------
     def build_word(self):
         if not HAS_REPORT:
