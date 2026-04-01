@@ -227,6 +227,10 @@ class MainWindowTk(tk.Tk):
         self.tree.delete(sel[0])
 
     def fill_demo(self):
+        self.in_p0.delete(0, tk.END)
+        self.in_p0.insert(0, "600")
+        self.in_tsh.delete(0, tk.END)
+        self.in_tsh.insert(0, "300")
         for item in self.tree.get_children():
             self.tree.delete(item)
         demo = [

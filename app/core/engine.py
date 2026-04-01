@@ -8,6 +8,7 @@ from typing import Optional, Dict, Any
 from app.core.models import Project, POUO, PipeRow
 from app.core.fuels import get_fuel
 from app.core.calcs.tvs_pipeline import calc_tvs_pipeline
+from app.report.charts import write_pouo_charts
 
 
 @dataclass
@@ -39,6 +40,7 @@ class EngineConfig:
     fuel_class_default: int = 4
     space_kind_default: str = "type3"
     make_charts: bool = True
+    charts_output_dir: str = "out/charts"
 
 
 def select_accident_pipe(p: POUO) -> Optional[PipeRow]:
@@ -530,6 +532,14 @@ def compute_for_pouo(p: POUO, cfg: EngineConfig | None = None) -> None:
             p.results["fireball"] = {
                 "skip_reason": "Для природного газа (газопровод) огненный шар обычно не рассчитывают."
             }
+
+            # 11. Графики — после всех расчётных блоков, если разрешено
+            if cfg.make_charts:
+                write_pouo_charts(
+                    results=p.results,
+                    output_dir=cfg.charts_output_dir,
+                    pouo_code=p.code,
+                )
 
         except Exception as e:
             p.results["error"] = str(e)

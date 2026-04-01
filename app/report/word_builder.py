@@ -467,16 +467,16 @@ def render_report(template_path: str, output_path: str, project) -> None:
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    print("[DEBUG] 1. Загружаем шаблон")
+    logger.debug("Загружаем шаблон: %s", template_path)
     doc = DocxTemplate(template_path)
 
-    print("[DEBUG] 2. Строим контекст")
+    logger.debug("Строим контекст для docxtpl")
     ctx = build_context(project, doc=doc)
 
-    print("[DEBUG] 3. Рендерим шаблон")
+    logger.debug("Рендерим шаблон")
     doc.render(ctx)
 
-    print("[DEBUG] 4. Сохраняем файл")
+    logger.debug("Сохраняем: %s", output_path)
     doc.save(output_path)
 
-    print("[DEBUG] 5. Готово")
+    logger.debug("Отчёт сохранён")
