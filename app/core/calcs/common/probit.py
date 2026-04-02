@@ -30,10 +30,8 @@ def calc_people_probit(delta_p_pa: float, i_plus_pa_s: float) -> float | None:
     if delta_p_pa <= 0 or i_plus_pa_s <= 0:
         return None
 
+    # val = ((17500/dP)^8.4 + (290/I)^9.3) > 0 всегда при положительных входных данных
     val = ((17500.0 / delta_p_pa) ** 8.4) + ((290.0 / i_plus_pa_s) ** 9.3)
-    if val <= 0:
-        return None
-
     return 5.0 - 0.26 * math.log(val)
 
 

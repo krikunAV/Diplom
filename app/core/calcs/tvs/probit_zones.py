@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple, Optional
 
 from app.core.context import CalculationContext
 
@@ -24,15 +24,19 @@ def _first_crossing_radius(
 
     Возвращает:
       float       — радиус пересечения (линейная интерполяция).
-      ZONE_ABSENT — зона физически отсутствует: y[0] <= threshold,
+      ZONE_ABSENT — зона физически отсутствует: y[0] < threshold,
                     значит максимум давления уже ниже порога.
       None        — зона уходит за пределы сетки: y[0] > threshold,
                     но кривая не упала до порога в пределах r_grid.
+
+    Важно: строгое y[0] < threshold (не <=).
+    Если y[0] == threshold, кривая может ещё упасть ниже порога
+    на конечном расстоянии — это не ZONE_ABSENT.
     """
     if not r_grid or not y or len(r_grid) != len(y):
         raise ValueError("r_grid and y must be non-empty lists of same length")
 
-    if y[0] <= threshold:
+    if y[0] < threshold:
         return ZONE_ABSENT
 
     for i in range(1, len(r_grid)):

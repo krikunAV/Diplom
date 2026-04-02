@@ -10,12 +10,13 @@ def calc_fireball_by_M(*, m_kg: float, Ef_kw_m2: float = 80.0) -> Dict[str, Any]
     """
     Расчёт «огненного шара» по суммарной массе выброса m (п. 7.2 методики).
 
-    Формулы:
+    Формулы (ГОСТ Р 12.3.047 / Ростехнадзор №412, п. 7.2):
       Ds = 5,33 × m^0,327        — эффективный диаметр, м
       H  = Ds / 2                — высота центра шара, м
       ts = 0,92 × m^0,303        — длительность существования, с
 
-      τ(r)  = exp(−7·10⁻⁴ · √(r² + H² − Ds/2))
+      dist(r) = max(0, √(r² + H²) − Ds/2)   — расстояние от поверхности шара до цели
+      τ(r)  = exp(−7·10⁻⁴ · dist(r))
       Fq(r) = (H/Ds + 0,5) / (4 · ((H/Ds + 0,5)² + (r/Ds)²)^1,5)
       q(r)  = Ef · Fq · τ                              [кВт/м²]
 
@@ -34,8 +35,10 @@ def calc_fireball_by_M(*, m_kg: float, Ef_kw_m2: float = 80.0) -> Dict[str, Any]
     a = H / Ds + 0.5
 
     def _tau(r: float) -> float:
-        inside = r * r + H * H - Ds / 2.0
-        return math.exp(-7e-4 * math.sqrt(max(0.0, inside)))
+        # Расстояние от ближайшей точки поверхности шара до цели
+        X = math.sqrt(r * r + H * H)      # расстояние центр → цель
+        dist = max(0.0, X - Ds / 2.0)     # вычитаем радиус шара
+        return math.exp(-7e-4 * dist)
 
     def _fq(r: float) -> float:
         if Ds <= 0:
@@ -48,8 +51,6 @@ def calc_fireball_by_M(*, m_kg: float, Ef_kw_m2: float = 80.0) -> Dict[str, Any]
         if q_kw <= 0 or ts <= 0:
             return None
         val = ts * (q_kw ** (4.0 / 3.0))
-        if val <= 0:
-            return None
         return -12.8 + 2.56 * math.log(val)
 
     # Сетка расстояний: 0..100 как в шаблоне, плюс запас до 200 м
