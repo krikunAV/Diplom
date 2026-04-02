@@ -1,6 +1,7 @@
 # app/report/word_builder.py
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List
@@ -9,6 +10,8 @@ from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 
 from app.core.fuels import get_fuel
+
+logger = logging.getLogger(__name__)
 
 
 def _to_dict(obj: Any) -> Any:
@@ -236,6 +239,11 @@ def _build_jetfire_block(results: Dict[str, Any]) -> Dict[str, Any]:
 def _build_fireball_block(results: Dict[str, Any]) -> Dict[str, Any]:
     """
     Подготовка блока огненного шара.
+
+    Из results["fireball"] читаем:
+      params  — Ds_m, H_m, ts_s, m_kg, Ef_kw_m2
+      table[] — r_m, tau, Fq, q_kw_m2, Pr, prob
+      zones[] — q_thr_kw_m2, r_m
     """
     fb = (results or {}).get("fireball", {}) or {}
     params = fb.get("params", {}) or {}
@@ -243,8 +251,12 @@ def _build_fireball_block(results: Dict[str, Any]) -> Dict[str, Any]:
     table = []
     for row in (fb.get("table") or []):
         table.append({
-            "r_m": _round_if_number(row.get("r_m")),
+            "r_m":     _round_if_number(row.get("r_m")),
+            "tau":     _round_if_number(row.get("tau"), 6),
+            "Fq":      _round_if_number(row.get("Fq"), 6),
             "q_kw_m2": _round_if_number(row.get("q_kw_m2"), 4),
+            "Pr":      _round_if_number(row.get("Pr"), 4),
+            "prob":    _round_if_number(row.get("prob"), 2),
         })
 
     zones = []
