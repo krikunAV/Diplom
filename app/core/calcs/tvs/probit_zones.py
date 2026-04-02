@@ -1,10 +1,12 @@
 # app/core/calcs/tvs/probit_zones.py
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
 from app.core.context import CalculationContext
+from app.core.calcs.common.probit import calc_people_probit, calc_building_probit, probit_to_percent
 
 
 # -------------------- helpers --------------------
@@ -169,12 +171,54 @@ def run_probit_zones(ctx: CalculationContext):
         for name, thr in people_thresholds_kpa.items()
     }
 
+    # -------------------- TVS table (probit per radius) --------------------
+    # Единственное место, где строится таблица пробит по радиусам.
+    # Дублирование с engine.py устранено: _build_tvs_table_from_ctx удалён.
+    Iplus = ctx.results.get("Iplus_Pa_s", [])
+    Rx = ctx.intermediate.get("Rx", [])
+    Px = ctx.intermediate.get("Px", [])
+    Ix = ctx.intermediate.get("Ix", [])
+
+    n = min(len(r_grid), len(dP), len(Iplus), len(Rx), len(Px), len(Ix))
+    tvs_table = []
+    for i in range(n):
+        dp_pa = float(dP[i])
+        dp_kpa = dp_pa / 1000.0
+        i_plus = float(Iplus[i])
+
+        pr_people = calc_people_probit(dp_pa, i_plus)
+        pr_full = calc_building_probit(dp_kpa, center_kpa=40.0)
+        pr_heavy = calc_building_probit(dp_kpa, center_kpa=30.0)
+
+        # Разрыв барабанных перепонок (probit 4)
+        pr4 = (-12.6 + 1.524 * math.log(dp_pa)) if dp_pa > 0 else None
+
+        tvs_table.append({
+            "r_m": float(r_grid[i]),
+            "Rx": float(Rx[i]),
+            "Px": float(Px[i]),
+            "Ix": float(Ix[i]),
+            "deltaP_Pa": dp_pa,
+            "deltaP_kPa": dp_kpa,
+            "Iplus_Pa_s": i_plus,
+            "Pr_people": pr_people,
+            "prob_people": probit_to_percent(pr_people),
+            "Pr_full": pr_full,
+            "prob_full": probit_to_percent(pr_full),
+            "Pr_heavy": pr_heavy,
+            "prob_heavy": probit_to_percent(pr_heavy),
+            "Pr4_eardrum": pr4,
+        })
+
     # -------------------- Save to context --------------------
     ctx.results["zones_glass"] = zones_glass
     ctx.results["zones_buildings"] = zones_buildings
     ctx.results["zones_people"] = zones_people
+    ctx.results["tvs_table"] = tvs_table
 
-    ctx.log("[zones] computed zones for glass/buildings/people (ΔP-based)")
+    ctx.log(
+        f"[zones] стекло/здания/люди (ΔP-based) + таблица пробит ({n} строк)"
+    )
 
     return ZonesResult(
         zones_glass=zones_glass,
