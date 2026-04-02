@@ -8,6 +8,20 @@ from tkinter import ttk, messagebox
 
 from app.core.scenarios import SCENARIOS
 from app.core.fuels import FUELS, get_fuel
+from app.ui_tk.debug_output import build_calculation_debug_output
+from app.core.calcs.tvs.probit_zones import ZONE_ABSENT
+
+
+def _fmt_zone_radius(val) -> str:
+    """Форматирует радиус зоны для краткого вывода."""
+    if val is None:
+        return "> 200 м"
+    if val == ZONE_ABSENT:
+        return "не реализуется"
+    try:
+        return f"{round(float(val), 1)} м"
+    except (TypeError, ValueError):
+        return str(val)
 
 try:
     from app.core.models import Project, POUO, PipeRow
@@ -136,10 +150,57 @@ class MainWindowTk(tk.Tk):
     def calculate_only(self):
         try:
             project = self._compute_and_return_project()
-            msg = self._make_summary_text(project)
-            messagebox.showinfo("Результаты расчёта", msg if msg.strip() else "Нет данных.")
+            self._show_debug_window(project)
         except Exception as e:
             messagebox.showerror("Ошибка расчёта", str(e))
+
+    def _show_debug_window(self, project):
+        """Открывает отдельное окно с подробными результатами расчёта."""
+        win = tk.Toplevel(self)
+        win.title("Подробные результаты расчёта (7.1 / 7.2 / 7.3)")
+        win.geometry("860x700")
+        win.minsize(600, 400)
+
+        frm = ttk.Frame(win)
+        frm.pack(fill="both", expand=True, padx=8, pady=8)
+
+        txt = tk.Text(
+            frm,
+            font=("Courier New", 10),
+            wrap="none",
+            bg="#1e1e1e",
+            fg="#d4d4d4",
+            insertbackground="#d4d4d4",
+            selectbackground="#264f78",
+            padx=8,
+            pady=8,
+        )
+        txt.pack(side="left", fill="both", expand=True)
+
+        scroll_y = ttk.Scrollbar(frm, orient="vertical", command=txt.yview)
+        txt.configure(yscrollcommand=scroll_y.set)
+        scroll_y.pack(side="left", fill="y")
+
+        scroll_x = ttk.Scrollbar(win, orient="horizontal", command=txt.xview)
+        txt.configure(xscrollcommand=scroll_x.set)
+        scroll_x.pack(fill="x", padx=8, pady=(0, 8))
+
+        # Заполняем текст — по одному ПОУО
+        all_text_parts = []
+        for p in project.pouos:
+            all_text_parts.append(build_calculation_debug_output(p.results))
+
+        full_text = "\n\n".join(all_text_parts)
+        txt.insert("1.0", full_text if full_text.strip() else "Нет данных.")
+        txt.config(state="disabled")
+
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(fill="x", padx=8, pady=(0, 8))
+        ttk.Button(btn_frame, text="Закрыть", command=win.destroy).pack(side="right")
+        ttk.Button(
+            btn_frame, text="Копировать всё",
+            command=lambda: (win.clipboard_clear(), win.clipboard_append(full_text))
+        ).pack(side="right", padx=8)
 
     def _build_buttons(self):
         frm = ttk.Frame(self)
@@ -266,7 +327,15 @@ class MainWindowTk(tk.Tk):
         s = (entry.get() or "").strip()
         if not s:
             return default
-        return float(s.replace(",", "."))
+        try:
+            return float(s.replace(",", "."))
+        except ValueError:
+            messagebox.showerror(
+                "Ошибка ввода",
+                f"Не удалось прочитать число: «{s}».\n"
+                "Допустимы только цифры, точка или запятая как разделитель дробной части."
+            )
+            raise
 
     # ---------------- data ----------------
     def collect_data(self) -> dict:
@@ -487,9 +556,9 @@ class MainWindowTk(tk.Tk):
                     for k, v in zones_buildings.items():
                         if isinstance(v, (list, tuple)) and len(v) == 2:
                             r1, r2 = v
-                            r1s = "0" if r1 is None else str(round(float(r1), 2))
-                            r2s = "не найдено" if r2 is None else str(round(float(r2), 2))
-                            pretty_parts.append(f"{k}: {r1s}–{r2s} м")
+                            r1s = _fmt_zone_radius(r1)
+                            r2s = _fmt_zone_radius(r2)
+                            pretty_parts.append(f"{k}: {r1s}–{r2s}")
                         else:
                             pretty_parts.append(f"{k}: {v}")
                     lines.append(f"  TVS building zones: {', '.join(pretty_parts)}")

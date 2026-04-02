@@ -2,29 +2,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 
 from app.core.context import CalculationContext
 
 
 # -------------------- helpers --------------------
 
+#: Возвращается из _first_crossing_radius когда зона физически отсутствует:
+#: максимальное давление (y[0]) уже ниже порога — порог никогда не был достигнут.
+ZONE_ABSENT = "-"
+
+
 def _first_crossing_radius(
     r_grid: List[float],
     y: List[float],
     threshold: float,
-) -> Optional[float]:
+):
     """
-    Находит радиус, где y(r) впервые становится <= threshold (монотонно убывающая кривая).
-    Возвращает радиус с линейной интерполяцией.
-    Если везде выше threshold -> None (не достигли).
-    Если уже в первой точке <= threshold -> r_grid[0].
+    Находит радиус, где монотонно убывающая кривая y(r) впервые падает <= threshold.
+
+    Возвращает:
+      float       — радиус пересечения (линейная интерполяция).
+      ZONE_ABSENT — зона физически отсутствует: y[0] <= threshold,
+                    значит максимум давления уже ниже порога.
+      None        — зона уходит за пределы сетки: y[0] > threshold,
+                    но кривая не упала до порога в пределах r_grid.
     """
     if not r_grid or not y or len(r_grid) != len(y):
         raise ValueError("r_grid and y must be non-empty lists of same length")
 
     if y[0] <= threshold:
-        return float(r_grid[0])
+        return ZONE_ABSENT
 
     for i in range(1, len(r_grid)):
         if y[i] <= threshold:
@@ -32,7 +41,6 @@ def _first_crossing_radius(
             y1, y2 = float(y[i - 1]), float(y[i])
             if y2 == y1:
                 return float(r2)
-            # линейная интерполяция по y
             t = (threshold - y1) / (y2 - y1)
             return r1 + t * (r2 - r1)
 
