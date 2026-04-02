@@ -8,6 +8,10 @@ from typing import Optional, Dict, Any
 from app.core.models import Project, POUO, PipeRow
 from app.core.fuels import get_fuel
 from app.core.calcs.tvs_pipeline import calc_tvs_pipeline
+from app.core.calcs.fire.jet_fire import calc_jetfire_by_M
+from app.core.calcs.fire.fireball import calc_fireball_by_M
+from app.core.calcs.common.wind import calc_wind_zone
+from app.core.calcs.common.probit import probit_to_percent, calc_people_probit, calc_building_probit
 from app.report.charts import write_pouo_charts
 
 
@@ -75,69 +79,6 @@ def _cst_from_k(k: float) -> float:
     return 100.0 / (1.0 + 4.84 * k)
 
 
-def _probit_to_percent(pr: float | None) -> float | None:
-    """
-    Перевод probit -> вероятность в %.
-    В классической probit-модели значение 5 соответствует примерно 50%.
-    """
-    if pr is None:
-        return None
-
-    z = pr - 5.0
-    p = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
-    return max(0.0, min(100.0, p * 100.0))
-
-
-def _calc_wind_zone(m_dot_kg_s: float, wind_m_s: float, coeff: float) -> float | None:
-    """
-    Универсальная формула для L и r0 из шаблона:
-        L  = 25   * sqrt(M / W)
-        r0 = 12.5 * sqrt(M / W)
-
-    coeff = 25 или 12.5
-    """
-    if m_dot_kg_s <= 0 or wind_m_s <= 0:
-        return None
-    return coeff * math.sqrt(m_dot_kg_s / wind_m_s)
-
-
-def _calc_people_probit(delta_p_pa: float, i_plus_pa_s: float) -> float | None:
-    """
-    Приближённая probit-оценка поражения человека ударной волной.
-
-    Нужна, чтобы:
-    - заполнять таблицу для Word;
-    - не ломать шаблон;
-    - иметь стабильные численные значения для всех строк.
-
-    Если давления или импульса нет — возвращаем None.
-    """
-    if delta_p_pa <= 0 or i_plus_pa_s <= 0:
-        return None
-
-    val = ((17500.0 / delta_p_pa) ** 8.4) + ((290.0 / i_plus_pa_s) ** 9.3)
-    if val <= 0:
-        return None
-
-    return 5.0 - 0.26 * math.log(val)
-
-
-def _calc_building_probit(
-    delta_p_kpa: float,
-    center_kpa: float,
-    slope_kpa: float = 5.0,
-) -> float | None:
-    """
-    Простая монотонная probit-модель для таблиц разрушения зданий.
-
-    center_kpa — примерно уровень, где вероятность около 50%.
-    slope_kpa  — 'крутизна' перехода.
-    """
-    if delta_p_kpa <= 0:
-        return None
-    return 5.0 + (delta_p_kpa - center_kpa) / slope_kpa
-
-
 def _choose_vg(range_id: int, m_cloud_kg: float) -> float | None:
     """
     Скорость фронта пламени для диапазона режима сгорания.
@@ -160,183 +101,6 @@ def _choose_vg(range_id: int, m_cloud_kg: float) -> float | None:
         k1 = 43.0
 
     return k1 * (m_cloud_kg ** (1.0 / 6.0))
-
-
-def _calc_jetfire_by_M(*, M_kg_s: float, K: float = 12.5, Ef_kw_m2: float = 80.0) -> Dict[str, Any]:
-    """
-    Упрощённый расчёт факельного горения:
-      Lf = K * M^0.4
-      Df = 0.15 * Lf
-
-    Затем считаем:
-    - коэффициент пропускания атмосферы tau(r),
-    - угловой коэффициент Fq(r),
-    - интенсивность теплового излучения q(r).
-
-    По q строим зоны для порогов:
-      1.4 / 4.2 / 7.0 / 10.5 кВт/м2
-    """
-    LF = K * (M_kg_s ** 0.4) if M_kg_s > 0 else 0.0
-    DF = 0.15 * LF if LF > 0 else 0.0
-
-    def tau(r: float) -> float:
-        inside = r * r + DF * DF - LF / 2.0
-        inside = max(0.0, inside)
-        return math.exp(-7e-4 * math.sqrt(inside))
-
-    def fq(r: float) -> float:
-        if LF <= 0:
-            return 0.0
-        a = (DF / LF) + 0.5
-        b = (r / LF)
-        return a / (4.0 * ((a * a + b * b) ** 1.5))
-
-    # Таблица расстояний для отчёта/графиков
-    r_grid = [0, 1, 2, 3, 5] + list(range(10, 101, 5)) + [125, 150, 200]
-
-    rows = []
-    for r in r_grid:
-        t = tau(float(r))
-        f = fq(float(r))
-        q = Ef_kw_m2 * f * t
-        rows.append({
-            "r_m": float(r),
-            "tau": float(t),
-            "Fq": float(f),
-            "q_kw_m2": float(q),
-        })
-
-    thresholds = [1.4, 4.2, 7.0, 10.5]
-    zones = []
-
-    # Ищем расстояние пересечения q(r) с каждым порогом
-    for thr in thresholds:
-        dist = None
-        for i in range(len(rows) - 1):
-            r0, q0 = rows[i]["r_m"], rows[i]["q_kw_m2"]
-            r1, q1 = rows[i + 1]["r_m"], rows[i + 1]["q_kw_m2"]
-
-            if (q0 - thr) == 0:
-                dist = r0
-                break
-
-            if (q0 - thr) * (q1 - thr) < 0:
-                tlin = (thr - q0) / (q1 - q0)
-                dist = r0 + tlin * (r1 - r0)
-                break
-
-        zones.append({
-            "q_thr_kw_m2": thr,
-            "r_m": None if dist is None else round(dist, 1),
-        })
-
-    return {
-        "params": {
-            "M_kg_s": float(M_kg_s),
-            "LF_m": float(LF),
-            "DF_m": float(DF),
-            "Ef_kw_m2": float(Ef_kw_m2),
-        },
-        "table": rows,
-        "zones": zones,
-    }
-
-
-def _calc_fireball_by_M(*, m_kg: float, Ef_kw_m2: float = 80.0) -> Dict[str, Any]:
-    """
-    Расчёт «огненного шара» по суммарной массе выброса m (п. 7.2 методики).
-
-    Формулы:
-      Ds = 5,33 × m^0,327        — эффективный диаметр, м
-      H  = Ds / 2                — высота центра шара, м
-      ts = 0,92 × m^0,303        — длительность существования, с
-
-      τ(r)  = exp(−7·10⁻⁴ · √(r² + H² − Ds/2))
-      Fq(r) = (H/Ds + 0,5) / (4 · ((H/Ds + 0,5)² + (r/Ds)²)^1,5)
-      q(r)  = Ef · Fq · τ                              [кВт/м²]
-
-      Pr(r) = −12,8 + 2,56 · ln(ts · q(r)^(4/3))      [пробит ожогов]
-
-    Зоны поражения строятся по порогам q: 1,4 / 4,2 / 7,0 / 10,5 кВт/м².
-    """
-    if m_kg <= 0:
-        return {"skip_reason": "m_kg ≤ 0, огненный шар не рассчитывается."}
-
-    Ds = 5.33 * (m_kg ** 0.327)
-    H  = Ds / 2.0
-    ts = 0.92 * (m_kg ** 0.303)
-
-    # Постоянная часть формулы Fq: a = H/Ds + 0.5 = 1.0 для шара с H = Ds/2
-    a = H / Ds + 0.5
-
-    def _tau(r: float) -> float:
-        inside = r * r + H * H - Ds / 2.0
-        return math.exp(-7e-4 * math.sqrt(max(0.0, inside)))
-
-    def _fq(r: float) -> float:
-        if Ds <= 0:
-            return 0.0
-        b = r / Ds
-        return a / (4.0 * ((a * a + b * b) ** 1.5))
-
-    def _probit_fb(q_kw: float) -> float | None:
-        """Пробит поражения тепловым излучением: Pr = −12,8 + 2,56·ln(ts·q^(4/3))."""
-        if q_kw <= 0 or ts <= 0:
-            return None
-        val = ts * (q_kw ** (4.0 / 3.0))
-        if val <= 0:
-            return None
-        return -12.8 + 2.56 * math.log(val)
-
-    # Сетка расстояний: 0..100 как в шаблоне, плюс запас до 200 м
-    r_grid = [0, 1, 2, 3, 5] + list(range(10, 101, 10)) + [125, 150, 175, 200]
-
-    rows = []
-    for r in r_grid:
-        t  = _tau(float(r))
-        f  = _fq(float(r))
-        q  = Ef_kw_m2 * f * t
-        pr = _probit_fb(q)
-        rows.append({
-            "r_m":     float(r),
-            "tau":     float(t),
-            "Fq":      float(f),
-            "q_kw_m2": float(q),
-            "Pr":      pr,
-            "prob":    _probit_to_percent(pr),
-        })
-
-    # Поиск радиусов для каждого порогового значения интенсивности
-    thresholds = [1.4, 4.2, 7.0, 10.5]
-    zones = []
-    for thr in thresholds:
-        dist = None
-        for i in range(len(rows) - 1):
-            r0, q0 = rows[i]["r_m"],     rows[i]["q_kw_m2"]
-            r1, q1 = rows[i + 1]["r_m"], rows[i + 1]["q_kw_m2"]
-            if abs(q0 - thr) < 1e-9:
-                dist = r0
-                break
-            if (q0 - thr) * (q1 - thr) < 0:
-                frac = (thr - q0) / (q1 - q0)
-                dist = r0 + frac * (r1 - r0)
-                break
-        zones.append({
-            "q_thr_kw_m2": thr,
-            "r_m": None if dist is None else round(dist, 1),
-        })
-
-    return {
-        "params": {
-            "m_kg":     round(m_kg, 2),
-            "Ds_m":     round(Ds,   2),
-            "H_m":      round(H,    2),
-            "ts_s":     round(ts,   2),
-            "Ef_kw_m2": float(Ef_kw_m2),
-        },
-        "table": rows,
-        "zones": zones,
-    }
 
 
 def _build_tvs_inputs_for_natgas(
@@ -449,9 +213,9 @@ def _build_tvs_table_from_ctx(ctx) -> list[dict]:
         delta_p_kpa = delta_p_pa / 1000.0
         i_plus_pa_s = float(Iplus[i])
 
-        pr_people = _calc_people_probit(delta_p_pa, i_plus_pa_s)
-        pr_full = _calc_building_probit(delta_p_kpa, center_kpa=40.0, slope_kpa=5.0)
-        pr_heavy = _calc_building_probit(delta_p_kpa, center_kpa=30.0, slope_kpa=5.0)
+        pr_people = calc_people_probit(delta_p_pa, i_plus_pa_s)
+        pr_full = calc_building_probit(delta_p_kpa, center_kpa=40.0, slope_kpa=5.0)
+        pr_heavy = calc_building_probit(delta_p_kpa, center_kpa=30.0, slope_kpa=5.0)
 
         rows.append({
             "r_m": float(r_grid[i]),
@@ -463,13 +227,13 @@ def _build_tvs_table_from_ctx(ctx) -> list[dict]:
             "Iplus_Pa_s": i_plus_pa_s,
 
             "Pr_people": pr_people,
-            "prob_people": _probit_to_percent(pr_people),
+            "prob_people": probit_to_percent(pr_people),
 
             "Pr_full": pr_full,
-            "prob_full": _probit_to_percent(pr_full),
+            "prob_full": probit_to_percent(pr_full),
 
             "Pr_heavy": pr_heavy,
-            "prob_heavy": _probit_to_percent(pr_heavy),
+            "prob_heavy": probit_to_percent(pr_heavy),
         })
 
     return rows
@@ -580,10 +344,10 @@ def compute_for_pouo(p: POUO, cfg: EngineConfig | None = None) -> None:
                 "E_J": ctx.intermediate.get("E_J"),
 
                 # Поля, которых ждёт шаблон
-                "L_wind1_m": _calc_wind_zone(m_dot, 1.0, 25.0),
-                "L_wind3_m": _calc_wind_zone(m_dot, 3.0, 25.0),
-                "r0_wind1_m": _calc_wind_zone(m_dot, 1.0, 12.5),
-                "r0_wind3_m": _calc_wind_zone(m_dot, 3.0, 12.5),
+                "L_wind1_m": calc_wind_zone(m_dot, 1.0, 25.0),
+                "L_wind3_m": calc_wind_zone(m_dot, 3.0, 25.0),
+                "r0_wind1_m": calc_wind_zone(m_dot, 1.0, 12.5),
+                "r0_wind3_m": calc_wind_zone(m_dot, 3.0, 12.5),
 
                 # Совместимость со старым UI
                 "G_kg_s": ctx.intermediate.get("m_dot_kg_s"),
@@ -623,10 +387,10 @@ def compute_for_pouo(p: POUO, cfg: EngineConfig | None = None) -> None:
             }
 
             # 9. Отдельно считаем факельное горение
-            p.results["jet_fire"] = _calc_jetfire_by_M(M_kg_s=m_dot)
+            p.results["jet_fire"] = calc_jetfire_by_M(M_kg_s=m_dot)
 
             # 10. Огненный шар — рассчитываем по суммарной массе выброса Mг
-            p.results["fireball"] = _calc_fireball_by_M(m_kg=mg)
+            p.results["fireball"] = calc_fireball_by_M(m_kg=mg)
 
             # 11. Графики — после всех расчётных блоков, если разрешено
             if cfg.make_charts:
