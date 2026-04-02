@@ -83,7 +83,7 @@ def _pouo_result_to_legacy(p: POUO, pouo_result) -> None:
             "Eud_J_kg":                inter.get("Eud_J_kg"),
             "E_concentration_correction": inter.get("E_concentration_correction"),
             "E_J":                     inter.get("E_J"),
-            # wind zones (добавляются runner'ом прямо в ctx.results)
+            # wind zones (вычисляются модулем run_wind_zones в TVS pipeline)
             **res.get("wind_zones", {}),
             # legacy aliases
             "G_kg_s":                  inter.get("m_dot_kg_s"),

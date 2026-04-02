@@ -7,6 +7,7 @@ from app.core.context import CalculationContext
 from app.core.calcs.tvs.release_cloud_energy import run_release_cloud_energy
 from app.core.calcs.tvs.shockwave import run_shockwave
 from app.core.calcs.tvs.probit_zones import run_probit_zones
+from app.core.calcs.common.wind import run_wind_zones
 from app.domain.base import BaseScenario, ScenarioError
 
 
@@ -18,6 +19,7 @@ class TVSExplosionScenario(BaseScenario):
       1. release_cloud_energy  — масса выброса, облако, удельная энергия
       2. shockwave             — ΔP(r), I+(r) по сетке радиусов
       3. probit_zones          — зоны стекло/здания/люди + таблица пробит
+      4. wind_zones            — ветровые зоны L и r0 по скоростям 1/3 м/с
 
     Формат raw_inputs:
       meta:             {scenario_id, notes}
@@ -30,7 +32,7 @@ class TVSExplosionScenario(BaseScenario):
     """
 
     scenario_type = "tvs_explosion"
-    modules = [run_release_cloud_energy, run_shockwave, run_probit_zones]
+    modules = [run_release_cloud_energy, run_shockwave, run_probit_zones, run_wind_zones]
 
     def prepare(self, raw_inputs: Dict[str, Any]) -> CalculationContext:
         return CalculationContext(inputs=raw_inputs)
