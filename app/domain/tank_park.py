@@ -47,11 +47,13 @@ def _run_fireball_from_cloud(ctx: CalculationContext) -> None:
     """
     Огненный шар из паровоздушного облака (diesel).
     Масса = масса испарившегося топлива (m_evap_kg).
+    Ef берётся из fuel.Ef_fireball_kw_m2 (ГОСТ Б.1, дизель ≈ 47 кВт/м²).
     """
     m_kg = float(ctx.intermediate.get("m_evap_kg", 0.0))
-    result = calc_fireball_by_M(m_kg=m_kg)
+    Ef = float(ctx.inputs["fuel"].get("Ef_fireball_kw_m2", 47.0))
+    result = calc_fireball_by_M(m_kg=m_kg, Ef_kw_m2=Ef)
     ctx.results["fireball"] = result
-    ctx.log(f"[fireball_cloud] m={m_kg:.2f} кг")
+    ctx.log(f"[fireball_cloud] m={m_kg:.2f} кг, Ef={Ef} кВт/м²")
 
 
 def _run_fireball_bleve(ctx: CalculationContext) -> None:
@@ -59,11 +61,13 @@ def _run_fireball_bleve(ctx: CalculationContext) -> None:
     Огненный шар BLEVE (lpg).
     Масса = суммарная масса жидкости в резервуарном парке (m_total_kg).
     Консервативный сценарий: вся жидкость участвует в шаре.
+    Ef берётся из fuel.Ef_fireball_kw_m2 (TNO Green Book, пропан ≈ 150 кВт/м²).
     """
     m_kg = float(ctx.intermediate.get("m_total_kg", 0.0))
-    result = calc_fireball_by_M(m_kg=m_kg)
+    Ef = float(ctx.inputs["fuel"].get("Ef_fireball_kw_m2", 150.0))
+    result = calc_fireball_by_M(m_kg=m_kg, Ef_kw_m2=Ef)
     ctx.results["fireball"] = result
-    ctx.log(f"[fireball_bleve] m={m_kg:.2f} кг (весь объём резервуаров)")
+    ctx.log(f"[fireball_bleve] m={m_kg:.2f} кг (весь объём резервуаров), Ef={Ef} кВт/м²")
 
 
 def _run_jet_fire_tank(ctx: CalculationContext) -> None:

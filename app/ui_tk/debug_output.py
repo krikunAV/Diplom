@@ -89,12 +89,26 @@ def _section_71(rel: dict, tvs: dict) -> list[str]:
     lines.append("")
 
     # --- Облако ---
+    # Для резервуарного парка rel пустой — читаем из tvs["intermediate"] как запасной источник
+    _tvs_inter = (tvs or {}).get("intermediate") or {}
     lines.append("  Облако ТВС:")
     lines.append(_line("Коэф. участия в облаке Z:", rel.get("Z"), decimals=2))
-    lines.append(_line("Масса облака m_cloud:", rel.get("m_cloud_kg"), decimals=2, unit="кг"))
-    lines.append(_line("Удельная энергия Eud:", rel.get("Eud_J_kg"), decimals=0, unit="Дж/кг"))
+    lines.append(_line(
+        "Масса облака m_cloud:",
+        rel.get("m_cloud_kg") or _tvs_inter.get("m_cloud_kg"),
+        decimals=2, unit="кг",
+    ))
+    lines.append(_line(
+        "Удельная энергия Eud:",
+        rel.get("Eud_J_kg") or _tvs_inter.get("Eud_J_kg"),
+        decimals=0, unit="Дж/кг",
+    ))
     lines.append(_line("Поправка конц. (Cg/Cst):", rel.get("E_concentration_correction"), decimals=4))
-    lines.append(_line("Энергозапас взрыва E:", rel.get("E_J"), decimals=4, unit="Дж"))
+    lines.append(_line(
+        "Энергозапас взрыва E:",
+        rel.get("E_J") or _tvs_inter.get("E_J"),
+        decimals=4, unit="Дж",
+    ))
     lines.append("")
 
     # --- Зоны ветрового рассеивания ---
@@ -242,24 +256,26 @@ def _section_tank_mass(tp: dict) -> list[str]:
     lines = []
     lines.append("──── Ёмкости резервуарного парка " + "─" * 39)
     inter = tp.get("intermediate") or {}
-    fuel_id = tp.get("fuel_id", "—")
+    inp   = tp.get("inputs") or {}
+    fuel_id = inp.get("fuel", {}).get("id", "—")
     lines.append(f"  Вид топлива: {fuel_id}")
     lines.append("")
     lines.append("  Массы:")
-    lines.append(_line("Объём одной ёмкости V, м³:", inter.get("volume_m3"), decimals=1))
-    lines.append(_line("Количество ёмкостей:",        inter.get("count"),     decimals=0))
-    lines.append(_line("Суммарная масса жидкости, кг:", inter.get("m_total_kg"), decimals=1))
+    lines.append(_line("Объём одной ёмкости V, м³:",     inter.get("volume_m3"),  decimals=1))
+    lines.append(_line("Количество ёмкостей:",            inter.get("count"),      decimals=0))
+    lines.append(_line("Суммарная масса жидкости, кг:",   inter.get("m_total_kg"), decimals=1))
     lines.append("")
     lines.append("  Испарение / вскипание:")
     if fuel_id == "diesel":
+        lines.append(_line("Давление насыщ. паров Pнас, кПа:", inter.get("Pnas_kpa"), decimals=4))
         lines.append(_line("Уд. скорость испарения W, кг/(м²·с):", inter.get("W_evap_kg_m2_s"), decimals=6))
         lines.append(_line("Масса испарившегося топлива, кг:",      inter.get("m_evap_kg"),      decimals=2))
         lines.append(_line("Масса облака (Z·m_evap), кг:",          inter.get("m_cloud_kg"),     decimals=2))
-        lines.append(_line("Энергозапас E_J, Дж:",                  inter.get("E_J"),            decimals=3))
+        lines.append(_line("Энергозапас E, Дж:",                    inter.get("E_J"),            decimals=4))
     else:  # lpg
-        lines.append(_line("Масса мгновенного вскипания, кг:", inter.get("m_flash_kg"), decimals=2))
+        lines.append(_line("Масса мгновенного вскипания, кг:", inter.get("m_flash_kg"),     decimals=2))
         lines.append(_line("Масса остаточного пролива, кг:",   inter.get("m_pool_evap_kg"), decimals=2))
-        lines.append(_line("Расход пара на факел ṁ, кг/с:",   inter.get("m_dot_kg_s"), decimals=4))
+        lines.append(_line("Расход пара на факел ṁ, кг/с:",   inter.get("m_dot_kg_s"),     decimals=4))
     lines.append("")
     return lines
 
@@ -278,8 +294,9 @@ def _section_pool_fire(pf: dict) -> list[str]:
     params = pf.get("params") or {}
     lines.append("  Параметры пожара пролива:")
     lines.append(_line("Площадь пролива Asp, м²:", params.get("area_m2"),    decimals=1))
-    lines.append(_line("Эффективный диаметр d, м:", params.get("d_eff_m"),   decimals=2))
-    lines.append(_line("Высота пламени H, м:",      params.get("H_flame_m"), decimals=2))
+    lines.append(_line("Эффективный диаметр d, м:", params.get("D_pool_m"),  decimals=2))
+    lines.append(_line("Высота пламени LF, м:",     params.get("LF_m"),      decimals=2))
+    lines.append(_line("Высота центра пламени H, м:", params.get("H_center_m"), decimals=2))
     lines.append(_line("Интенсивность Ef, кВт/м²:", params.get("Ef_kw_m2"), decimals=1))
     lines.append("")
     lines.append("  Зоны поражения (тепловое излучение):")

@@ -136,12 +136,21 @@ class MainWindowTk(tk.Tk):
         ttk.Label(grp_exposure, text="(0 — расчёт площадей без числа людей)",
                   foreground="#888").grid(row=0, column=2, sticky="w", padx=(4, 10), pady=6)
 
-        # ── подсказка ──────────────────────────────────────────────────────
+        # ── подсказка + кнопка примера ────────────────────────────────────────
+        hint_row = ttk.Frame(self.frm_tank)
+        hint_row.grid(row=2, column=0, columnspan=2, padx=14, pady=(0, 8), sticky="ew")
+
         ttk.Label(
-            self.frm_tank,
+            hint_row,
             text="Топливо: СУГ (lpg) или дизельное (diesel)  ·  Трубопроводы не требуются",
             foreground="#888",
-        ).grid(row=2, column=0, columnspan=2, padx=14, pady=(0, 8), sticky="w")
+        ).pack(side="left")
+
+        ttk.Button(
+            hint_row,
+            text="Заполнить пример",
+            command=self.fill_demo,
+        ).pack(side="right", padx=(8, 0))
 
     def _build_table(self):
         """Таблица трубопроводов. Пакуется/снимается через _refresh_layout()."""

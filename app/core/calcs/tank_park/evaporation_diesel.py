@@ -11,7 +11,7 @@
   spill.area_m2       — площадь пролива, м²
   spill.duration_s    — расчётное время испарения, с
   spill.eta           — коэффициент ветровой нагрузки (default 1)
-  fuel.Pnas_pa        — давление насыщенного пара при 20°C, Па
+  fuel.Pnas_kpa       — давление насыщенного пара при расчётной температуре, кПа
   fuel.M_g_mol        — молярная масса, г/моль
   fuel.eud0_j_per_kg  — удельная теплота сгорания, Дж/кг
   substance.beta      — коэффициент эффективности горения
@@ -41,7 +41,7 @@ def run_diesel_evaporation(ctx: CalculationContext) -> None:
 
         W = 1·10⁻⁶ · η · Pнас · √M            [кг/(м²·с)]
 
-    где Pнас — давление насыщенного пара при температуре воздуха, Па;
+    где Pнас — давление насыщенного пара при расчётной температуре, **кПа**;
         M    — молярная масса, г/моль (= кг/кмоль);
         η    — коэффициент, зависящий от скорости ветра (1 при В ≤ 0.5 м/с).
 
@@ -62,7 +62,7 @@ def run_diesel_evaporation(ctx: CalculationContext) -> None:
     duration_s = float(spill["duration_s"])
     eta = float(spill.get("eta", 1.0))
 
-    Pnas_pa = float(fuel["Pnas_pa"])
+    Pnas_kpa = float(fuel["Pnas_kpa"])
     M_g_mol = float(fuel["M_g_mol"])
     eud0 = float(fuel["eud0_j_per_kg"])
     beta = float(subst.get("beta", 1.0))
@@ -74,11 +74,11 @@ def run_diesel_evaporation(ctx: CalculationContext) -> None:
         raise ValueError("spill.area_m2 должна быть > 0")
     if duration_s <= 0:
         raise ValueError("spill.duration_s должна быть > 0")
-    if Pnas_pa <= 0 or M_g_mol <= 0:
-        raise ValueError("fuel.Pnas_pa и fuel.M_g_mol должны быть > 0")
+    if Pnas_kpa <= 0 or M_g_mol <= 0:
+        raise ValueError("fuel.Pnas_kpa и fuel.M_g_mol должны быть > 0")
 
-    # ── Скорость испарения (ГОСТ К.1) ────────────────────────────────────────
-    W = 1e-6 * eta * Pnas_pa * math.sqrt(M_g_mol)   # кг/(м²·с)
+    # ── Скорость испарения (ГОСТ К.1, Pнас в кПа) ────────────────────────────
+    W = 1e-6 * eta * Pnas_kpa * math.sqrt(M_g_mol)   # кг/(м²·с)
 
     # ── Масса испарившегося вещества ─────────────────────────────────────────
     m_evap_raw = W * area_m2 * duration_s
@@ -92,6 +92,7 @@ def run_diesel_evaporation(ctx: CalculationContext) -> None:
     E = m_cloud * Eud
 
     # ── Запись в контекст ─────────────────────────────────────────────────────
+    ctx.intermediate["Pnas_kpa"] = Pnas_kpa  # для отображения
     ctx.intermediate["W_evap_kg_m2_s"] = W
     ctx.intermediate["m_evap_kg"] = m_evap
     ctx.intermediate["m_cloud_kg"] = m_cloud

@@ -175,12 +175,14 @@ def _build_tank_park_inputs(
             "id":                    "diesel",
             "rho_liq":               fuel.rho_liq,
             "eud0_j_per_kg":         fuel.eud0_j_per_kg,
-            # Константы испарения (ГОСТ К.1)
-            "Pnas_pa":               cfg.diesel_Pnas_pa,
+            # Константы испарения (ГОСТ К.1) — Pnas в кПа при расчётной температуре
+            "Pnas_kpa":              cfg.diesel_Pnas_kpa,
             "M_g_mol":               cfg.diesel_M_g_mol,
             # Параметры пожара пролива
             "Ef_pool_kw_m2":         cfg.diesel_Ef_pool_kw_m2,
             "burn_rate_kg_m2_s":     cfg.diesel_burn_rate_kg_m2_s,
+            # Параметры огненного шара (ГОСТ Б.1, дизель)
+            "Ef_fireball_kw_m2":     cfg.diesel_Ef_fireball_kw_m2,
         }
         substance: Dict[str, Any] = {
             "sigma":    cfg.sigma_diesel,
@@ -197,8 +199,10 @@ def _build_tank_park_inputs(
             "id":                "lpg",
             "rho_liq":           fuel.rho_liq,
             "eud0_j_per_kg":     fuel.eud0_j_per_kg,
-            # Параметры факела
+            # Параметры факела (ГОСТ Б.1, пропан)
             "Ef_jet_kw_m2":      cfg.lpg_Ef_jet_kw_m2,
+            # Параметры огненного шара BLEVE (TNO Green Book гл. 6)
+            "Ef_fireball_kw_m2": cfg.lpg_Ef_fireball_kw_m2,
         }
         substance = {
             "sigma": cfg.sigma_lpg,
