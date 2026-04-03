@@ -6,9 +6,10 @@
 Все знания о том, «что запускать и с какими входными данными»,
 живут здесь.
 
-Добавить новый рецепт (например, LPG outdoor):
-  1. написать функцию lpg_outdoor_scenarios()
-  2. зарегистрировать её в RECIPES
+Добавить новый рецепт:
+  1. написать build_inputs функцию
+  2. написать фабрику <name>_scenarios()
+  3. добавить ветку в get_recipe()
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from typing import Any, Dict, List
 from app.pipeline.config import EngineConfig
 from app.pipeline.models import POUOInput, ScenarioConfig
 from app.core.models import PipeRow
+from app.core.fuels import get_fuel
 
 
 # ── Вспомогательные функции построения входных данных ─────────────────────────
@@ -150,13 +152,131 @@ def natgas_outdoor_scenarios() -> List[ScenarioConfig]:
     ]
 
 
+# ── Резервуарный парк ─────────────────────────────────────────────────────────
+
+def _build_tank_park_inputs(
+    pouo: POUOInput,
+    cfg: EngineConfig,
+    accumulated: dict,
+) -> Dict[str, Any]:
+    """
+    Строит raw_inputs для TankParkScenario из POUOInput.
+
+    Поддерживаемые fuel_id: "diesel", "lpg".
+    Не использует pouo.pipes / PipeRow.
+    """
+    fuel = get_fuel(pouo.fuel_id)
+
+    tank = pouo.inputs.get("tank", {})
+    spill = pouo.inputs.get("spill", {})
+
+    if pouo.fuel_id == "diesel":
+        fuel_section: Dict[str, Any] = {
+            "id":                    "diesel",
+            "rho_liq":               fuel.rho_liq,
+            "eud0_j_per_kg":         fuel.eud0_j_per_kg,
+            # Константы испарения (ГОСТ К.1)
+            "Pnas_pa":               cfg.diesel_Pnas_pa,
+            "M_g_mol":               cfg.diesel_M_g_mol,
+            # Параметры пожара пролива
+            "Ef_pool_kw_m2":         cfg.diesel_Ef_pool_kw_m2,
+            "burn_rate_kg_m2_s":     cfg.diesel_burn_rate_kg_m2_s,
+        }
+        substance: Dict[str, Any] = {
+            "sigma":    cfg.sigma_diesel,
+            "beta":     1.0,
+            # Для run_shockwave нужны C_st и C_g — устанавливаем одинаковыми
+            # → correction = 1 (консервативно, METHODOLOGY_7_1_7_3.md §7.1.10)
+            "rho_gas_kg_m3":  0.7,     # не используется в TVS tank_park
+            "Eud0_J_kg":      fuel.eud0_j_per_kg,
+            "C_st_kg_m3":     0.064,
+            "C_g_kg_m3":      0.064,
+        }
+    else:  # lpg
+        fuel_section = {
+            "id":                "lpg",
+            "rho_liq":           fuel.rho_liq,
+            "eud0_j_per_kg":     fuel.eud0_j_per_kg,
+            # Параметры факела
+            "Ef_jet_kw_m2":      cfg.lpg_Ef_jet_kw_m2,
+        }
+        substance = {
+            "sigma": cfg.sigma_lpg,
+            "beta":  1.0,
+        }
+
+    # Плотность персонала (для run_people_exposure)
+    exposure_raw = pouo.inputs.get("exposure", {}) or {}
+    exposure_section: Dict[str, Any] = {
+        "people_density_per_ha": float(exposure_raw.get("people_density_per_ha", 0.0)),
+    }
+
+    return {
+        "meta": {
+            "scenario_id": f"TANKPARK_{pouo.code}",
+            "fuel_id":     pouo.fuel_id,
+            "notes":       pouo.title,
+        },
+        "tank": {
+            "volume_m3": float(tank.get("volume_m3", 0.0)),
+            "count":     int(tank.get("count", 1)),
+        },
+        "spill": {
+            "area_m2":           float(spill.get("area_m2", 0.0)),
+            "duration_s":        float(spill.get("duration_s", 3600.0)),
+            "eta":               1.0,                      # без ветра
+            "flash_fraction":    cfg.lpg_flash_fraction,
+            "pool_evap_fraction": cfg.lpg_pool_evap_fraction,
+        },
+        "fuel":      fuel_section,
+        "substance": substance,
+        "cloud": {
+            "Z": cfg.Z_tank,
+        },
+        "env": {
+            "P0_Pa":   cfg.p0_pa,
+            "C0_mps":  cfg.c0_m_s,
+        },
+        # Нужно для run_shockwave (только для diesel):
+        "shockwave": {
+            "r_grid_m":      [0, 1, 2, 3, 5] + list(range(10, 101, 5)) + [125, 150, 200],
+            "explosion_mode": "deflagration",
+            "range_id":      cfg.tvs_range_id,
+        },
+        "exposure": exposure_section,
+    }
+
+
+def tank_park_scenarios() -> List[ScenarioConfig]:
+    """Рецепт для резервуарного парка (diesel или lpg)."""
+    return [
+        ScenarioConfig(
+            "tank_park",
+            _build_tank_park_inputs,
+            requires=frozenset(),
+            provides=frozenset({"Mg_kg"}),
+        ),
+    ]
+
+
 # ── Реестр рецептов ───────────────────────────────────────────────────────────
 
-def get_recipe(fuel_id: str, is_indoor: bool) -> List[ScenarioConfig]:
+def get_recipe(
+    fuel_id: str,
+    is_indoor: bool,
+    scenario_code: str = "",
+) -> List[ScenarioConfig]:
     """
-    Возвращает список ScenarioConfig для заданного топлива и типа размещения.
-    Добавить новое топливо/тип — добавить ветку здесь.
+    Возвращает список ScenarioConfig для заданного ПООУ.
+
+    Приоритет проверок:
+      1. scenario_code == "POUO1"  → резервуарный парк
+      2. outdoor natgas            → трубопроводный газ
+      3. всё остальное             → пустой список (заглушка)
     """
+    if scenario_code == "POUO1":
+        return tank_park_scenarios()
+
     if not is_indoor and fuel_id == "natgas":
         return natgas_outdoor_scenarios()
 

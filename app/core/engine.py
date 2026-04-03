@@ -120,6 +120,53 @@ def _pouo_result_to_legacy(p: POUO, pouo_result) -> None:
         else:
             p.results["fireball"] = {"skip_reason": fb_sr.error}
 
+    # ── Tank park (резервуарный парк) ─────────────────────────────────────────
+    tp_sr = pouo_result.scenarios.get("tank_park")
+    if tp_sr:
+        if tp_sr.ok:
+            ctx = tp_sr.ctx
+            inter = ctx.intermediate
+            res = ctx.results
+
+            # Основной блок результатов
+            p.results["tank_park"] = {
+                "inputs":       ctx.inputs,
+                "intermediate": inter,
+                "results":      res,
+                "logs":         ctx.logs,
+            }
+
+            # release-совместимый блок для Word builder и UI summary
+            p.results["release"] = {
+                "fuel_id":       ctx.inputs.get("fuel", {}).get("id", ""),
+                "m_total_kg":    inter.get("m_total_kg"),
+                "m_evap_kg":     inter.get("m_evap_kg"),
+                "m_flash_kg":    inter.get("m_flash_kg"),
+                "m_cloud_kg":    inter.get("m_cloud_kg"),
+                "Mg_kg":         inter.get("Mg_kg"),
+                "m_dot_kg_s":    inter.get("m_dot_kg_s"),
+                "E_J":           inter.get("E_J"),
+            }
+
+            # Перекладываем результаты во top-level для UI/Word
+            if "fireball" in res:
+                p.results["fireball"] = res["fireball"]
+            if "jet_fire" in res:
+                p.results["jet_fire"] = res["jet_fire"]
+            if "pool_fire" in res:
+                p.results["pool_fire"] = res["pool_fire"]
+
+            # ТВС-взрыв (только diesel)
+            if inter.get("E_J") and res.get("dP_Pa"):
+                p.results["tvs_explosion"] = {
+                    "intermediate": inter,
+                    "results":      res,
+                    "table":        res.get("tvs_table", []),
+                }
+
+        else:
+            p.results["error"] = tp_sr.error
+
 
 def compute_for_pouo(p: POUO, cfg: EngineConfig | None = None) -> None:
     """

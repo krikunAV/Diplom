@@ -18,6 +18,7 @@ class Scenario:
     needs_pressure: bool = True        # P0_kpa
     needs_shutoff: bool = True         # t_shutoff_s
     needs_room_volume: bool = False    # V_room_m3
+    needs_tank: bool = False           # резервуарный парк (volume, count, spill)
 
 
 SCENARIOS: Dict[str, Scenario] = {
@@ -30,6 +31,7 @@ SCENARIOS: Dict[str, Scenario] = {
         needs_pressure=False,
         needs_shutoff=False,
         needs_room_volume=False,
+        needs_tank=True,
     ),
     "POUO2": Scenario(
         id="POUO2",

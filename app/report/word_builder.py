@@ -353,6 +353,78 @@ def _build_tvs_block(results: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _build_pool_fire_block(results: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Подготовка блока пожара пролива (diesel tank park).
+    """
+    pf = (results or {}).get("pool_fire", {}) or {}
+    params = pf.get("params", {}) or {}
+
+    zones = []
+    for z in (pf.get("zones") or []):
+        zones.append({
+            "q_thr_kw_m2": _round_if_number(z.get("q_thr_kw_m2"), 2),
+            "r_m": _pretty_value(z.get("r_m")),
+        })
+
+    return {
+        "params": {
+            "area_m2":    _round_if_number(params.get("area_m2"), 1),
+            "d_eff_m":    _round_if_number(params.get("d_eff_m"), 2),
+            "H_flame_m":  _round_if_number(params.get("H_flame_m"), 2),
+            "Ef_kw_m2":   _round_if_number(params.get("Ef_kw_m2"), 1),
+        },
+        "zones": zones,
+        "skip_reason": pf.get("skip_reason"),
+    }
+
+
+def _build_tank_park_block(results: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Сводный блок резервуарного парка для Word-шаблона.
+
+    Агрегирует промежуточные данные из results["tank_park"]["intermediate"]
+    и оценку числа людей из results["people_exposure"].
+    """
+    tp = (results or {}).get("tank_park", {}) or {}
+    inter = tp.get("intermediate", {}) or {}
+    fuel_id = tp.get("fuel_id", "")
+
+    pe = (results or {}).get("people_exposure", {}) or {}
+
+    def _pe_zones(key: str):
+        return [
+            {
+                "q_thr_kw_m2": _round_if_number(z.get("q_thr_kw_m2"), 2),
+                "r_m":         _pretty_value(z.get("r_m")),
+                "area_ha":     _round_if_number(z.get("area_ha"), 3),
+                "n_people":    _pretty_value(z.get("n_people"), 1),
+            }
+            for z in (pe.get(key) or [])
+        ]
+
+    return {
+        "fuel_id":        fuel_id,
+        "volume_m3":      _round_if_number(inter.get("volume_m3"), 1),
+        "count":          inter.get("count"),
+        "m_total_kg":     _round_if_number(inter.get("m_total_kg"), 1),
+        # diesel
+        "W_evap_kg_m2_s": _round_if_number(inter.get("W_evap_kg_m2_s"), 6),
+        "m_evap_kg":      _round_if_number(inter.get("m_evap_kg"), 2),
+        "m_cloud_kg":     _round_if_number(inter.get("m_cloud_kg"), 2),
+        "E_J":            _round_if_number(inter.get("E_J"), 2),
+        # lpg
+        "m_flash_kg":     _round_if_number(inter.get("m_flash_kg"), 2),
+        "m_pool_evap_kg": _round_if_number(inter.get("m_pool_evap_kg"), 2),
+        "m_dot_kg_s":     _round_if_number(inter.get("m_dot_kg_s"), 4),
+        # люди
+        "people_density_per_ha": pe.get("density_per_ha", 0),
+        "people_jet_fire":  _pe_zones("jet_fire"),
+        "people_pool_fire": _pe_zones("pool_fire"),
+        "people_fireball":  _pe_zones("fireball"),
+    }
+
+
 def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
     """
     Собирает итоговый контекст для шаблона Word.
@@ -411,6 +483,8 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
         jetfire_block = _build_jetfire_block(raw_results)
         fireball_block = _build_fireball_block(raw_results)
         tvs_block = _build_tvs_block(raw_results)
+        pool_fire_block = _build_pool_fire_block(raw_results)
+        tank_park_block = _build_tank_park_block(raw_results)
 
         code = getattr(p, "code", "")
         charts_dir = os.path.join("out", "charts")
@@ -442,6 +516,8 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             "jet_fire": jetfire_block,
             "fireball": fireball_block,
             "tvs": tvs_block,
+            "pool_fire": pool_fire_block,
+            "tank_park": tank_park_block,
 
             # Пути к графикам
             "tvs_dp_chart_path": tvs_dp_path,
@@ -450,12 +526,16 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             "fireball_chart_path": fireball_path,
 
             # Флаги для шаблона
-            "has_release": bool(release_block and not release_block.get("skip_reason")),
-            "has_jet_fire": bool(jetfire_block and not jetfire_block.get("skip_reason")),
-            "has_fireball": bool(fireball_block and not fireball_block.get("skip_reason")),
-            "has_tvs": bool(tvs_block and not tvs_block.get("skip_reason")),
-            "has_error": bool(raw_results.get("error")),
-            "error_text": raw_results.get("error"),
+            "has_release":   bool(release_block   and not release_block.get("skip_reason")),
+            "has_jet_fire":  bool(jetfire_block    and not jetfire_block.get("skip_reason")),
+            "has_fireball":  bool(fireball_block   and not fireball_block.get("skip_reason")),
+            "has_tvs":       bool(tvs_block        and not tvs_block.get("skip_reason")),
+            "has_pool_fire": bool(pool_fire_block  and not pool_fire_block.get("skip_reason")
+                                  and pool_fire_block.get("zones")),
+            "has_tank_park": bool(tank_park_block  and tank_park_block.get("fuel_id")),
+            "is_tank_park":  bool(raw_results.get("tank_park")),
+            "has_error":     bool(raw_results.get("error")),
+            "error_text":    raw_results.get("error"),
         }
 
         # Если передан doc — подцепляем картинки как InlineImage

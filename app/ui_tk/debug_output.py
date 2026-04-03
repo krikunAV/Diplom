@@ -238,6 +238,86 @@ def _section_73(fb: dict) -> list[str]:
     return lines
 
 
+def _section_tank_mass(tp: dict) -> list[str]:
+    lines = []
+    lines.append("──── Ёмкости резервуарного парка " + "─" * 39)
+    inter = tp.get("intermediate") or {}
+    fuel_id = tp.get("fuel_id", "—")
+    lines.append(f"  Вид топлива: {fuel_id}")
+    lines.append("")
+    lines.append("  Массы:")
+    lines.append(_line("Объём одной ёмкости V, м³:", inter.get("volume_m3"), decimals=1))
+    lines.append(_line("Количество ёмкостей:",        inter.get("count"),     decimals=0))
+    lines.append(_line("Суммарная масса жидкости, кг:", inter.get("m_total_kg"), decimals=1))
+    lines.append("")
+    lines.append("  Испарение / вскипание:")
+    if fuel_id == "diesel":
+        lines.append(_line("Уд. скорость испарения W, кг/(м²·с):", inter.get("W_evap_kg_m2_s"), decimals=6))
+        lines.append(_line("Масса испарившегося топлива, кг:",      inter.get("m_evap_kg"),      decimals=2))
+        lines.append(_line("Масса облака (Z·m_evap), кг:",          inter.get("m_cloud_kg"),     decimals=2))
+        lines.append(_line("Энергозапас E_J, Дж:",                  inter.get("E_J"),            decimals=3))
+    else:  # lpg
+        lines.append(_line("Масса мгновенного вскипания, кг:", inter.get("m_flash_kg"), decimals=2))
+        lines.append(_line("Масса остаточного пролива, кг:",   inter.get("m_pool_evap_kg"), decimals=2))
+        lines.append(_line("Расход пара на факел ṁ, кг/с:",   inter.get("m_dot_kg_s"), decimals=4))
+    lines.append("")
+    return lines
+
+
+def _section_pool_fire(pf: dict) -> list[str]:
+    lines = []
+    lines.append("──── Пожар пролива (дизельное топливо) " + "─" * 33)
+    lines.append("")
+
+    skip = pf.get("skip_reason")
+    if skip:
+        lines.append(f"  Пропуск: {skip}")
+        lines.append("")
+        return lines
+
+    params = pf.get("params") or {}
+    lines.append("  Параметры пожара пролива:")
+    lines.append(_line("Площадь пролива Asp, м²:", params.get("area_m2"),    decimals=1))
+    lines.append(_line("Эффективный диаметр d, м:", params.get("d_eff_m"),   decimals=2))
+    lines.append(_line("Высота пламени H, м:",      params.get("H_flame_m"), decimals=2))
+    lines.append(_line("Интенсивность Ef, кВт/м²:", params.get("Ef_kw_m2"), decimals=1))
+    lines.append("")
+    lines.append("  Зоны поражения (тепловое излучение):")
+    lines.extend(_zone_rows(pf.get("zones")))
+    lines.append("")
+    return lines
+
+
+def _section_people_exposure(pe: dict) -> list[str]:
+    if not pe:
+        return []
+    lines = []
+    lines.append("──── Оценка числа людей в зонах поражения " + "─" * 30)
+    density = pe.get("density_per_ha", 0)
+    lines.append(f"  Плотность персонала: {density} чел/га")
+    lines.append("")
+
+    def _zone_table(title: str, zones: list) -> None:
+        if not zones:
+            return
+        lines.append(f"  {title}:")
+        for z in zones:
+            q = z.get("q_thr_kw_m2", "?")
+            r = z.get("r_m")
+            a = z.get("area_ha")
+            n = z.get("n_people")
+            r_str = f"{r:.1f} м" if r else "—"
+            a_str = f"{a:.2f} га" if a else "—"
+            n_str = f"{n:.0f} чел" if n is not None else "(ρ не задана)"
+            lines.append(f"    q≥{q:<5} кВт/м²  r={r_str:<8}  A={a_str:<10}  N≈{n_str}")
+
+    _zone_table("Факел (LPG)",          pe.get("jet_fire") or [])
+    _zone_table("Пожар пролива (diesel)", pe.get("pool_fire") or [])
+    _zone_table("Огненный шар",          pe.get("fireball") or [])
+    lines.append("")
+    return lines
+
+
 def build_calculation_debug_output(results: dict) -> str:
     """
     Принимает p.results одного ПОУО.
@@ -260,19 +340,50 @@ def build_calculation_debug_output(results: dict) -> str:
 
     # --- Ошибка / пропуск ---
     if results.get("error"):
-        lines.append(f"  ❌ Ошибка расчёта: {results['error']}")
+        lines.append(f"  Ошибка расчёта: {results['error']}")
         return "\n".join(lines)
 
     if results.get("skip"):
-        lines.append(f"  ⚠ Пропуск: {results['skip']}")
+        lines.append(f"  Пропуск: {results['skip']}")
         return "\n".join(lines)
 
+    # --- Резервуарный парк (tank_park) ---
+    tp = results.get("tank_park") or {}
+    if tp:
+        lines.extend(_section_tank_mass(tp))
+
+        # ТВС-взрыв (только diesel)
+        tvs = results.get("tvs_explosion") or {}
+        if tvs:
+            lines.extend(_section_71({}, tvs))
+
+        # Огненный шар
+        fb = results.get("fireball") or {}
+        if fb:
+            lines.extend(_section_73(fb))
+
+        # Пожар пролива (diesel)
+        pf = results.get("pool_fire") or {}
+        if pf:
+            lines.extend(_section_pool_fire(pf))
+
+        # Факел (LPG)
+        jf = results.get("jet_fire") or {}
+        if jf:
+            lines.extend(_section_72(jf))
+
+        # Число людей
+        pe = results.get("people_exposure") or {}
+        lines.extend(_section_people_exposure(pe))
+
+        return "\n".join(lines)
+
+    # --- Стандартный pipeline (natgas + др.) ---
     rel = results.get("release") or {}
     tvs = results.get("tvs_explosion") or {}
     jf = results.get("jet_fire") or {}
     fb = results.get("fireball") or {}
 
-    # --- Разделы 7.1 / 7.2 / 7.3 ---
     lines.extend(_section_71(rel, tvs))
     lines.extend(_section_72(jf))
     lines.extend(_section_73(fb))

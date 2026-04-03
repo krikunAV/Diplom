@@ -7,11 +7,13 @@ from app.domain.base import BaseScenario
 from app.domain.tvs_explosion import TVSExplosionScenario
 from app.domain.jet_fire import JetFireScenario
 from app.domain.fireball import FireballScenario
+from app.domain.tank_park import TankParkScenario
 
 SCENARIO_REGISTRY: Dict[str, BaseScenario] = {
     "tvs_explosion": TVSExplosionScenario(),
     "jet_fire": JetFireScenario(),
     "fireball": FireballScenario(),
+    "tank_park": TankParkScenario(),
 }
 
 

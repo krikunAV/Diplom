@@ -154,7 +154,9 @@ def run_project(
 def pouo_to_input(p: POUO) -> POUOInput:
     """
     Конвертирует legacy POUO → POUOInput.
-    Рецепт (список ScenarioConfig) подбирается автоматически по fuel_id и is_indoor.
+    Рецепт подбирается по fuel_id, is_indoor И scenario_code (p.code).
+    scenario_code нужен чтобы отличить POUO1 (резервуарный парк)
+    от других сценариев с diesel/lpg.
     """
     return POUOInput(
         code=p.code,
@@ -163,7 +165,7 @@ def pouo_to_input(p: POUO) -> POUOInput:
         is_indoor=p.is_indoor,
         inputs=dict(p.inputs),
         pipes=list(p.pipes),
-        scenario_configs=get_recipe(p.fuel_id, p.is_indoor),
+        scenario_configs=get_recipe(p.fuel_id, p.is_indoor, scenario_code=p.code),
     )
 
 
