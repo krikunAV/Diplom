@@ -165,8 +165,13 @@ def run_shockwave(ctx: CalculationContext) -> ShockwaveResult:
     C0 = float(env["C0_mps"])
     sigma = float(subst["sigma"])
 
-    # Режим: detonation / deflagration
+    # Режим из входных данных
     mode = sh["explosion_mode"]
+    range_id = int(sh.get("range_id", 3))
+
+    # range_id == 1 означает детонацию (скорость ≥ 500 м/с) независимо от поля mode.
+    # Остальные диапазоны используют режим из inputs.
+    effective_mode = "detonation" if range_id == 1 else mode
 
     # Сетка расстояний, на которых считаем волну
     r_grid = [float(x) for x in sh["r_grid_m"]]
@@ -179,14 +184,9 @@ def run_shockwave(ctx: CalculationContext) -> ShockwaveResult:
     # Масштаб длины по методике
     L_scale = (E / P0) ** (1.0 / 3.0)
 
-    # Для дефлаграции нужна скорость фронта пламени
-    range_id = int(sh.get("range_id", 3))
+    # Скорость фронта нужна только для дефлаграции (диапазоны 2–6)
     m_cloud = float(ctx.intermediate.get("m_cloud_kg", 0.0))
-
-    if mode == "deflagration":
-        Vg = _choose_vg(range_id, m_cloud)
-    else:
-        Vg = None
+    Vg = _choose_vg(range_id, m_cloud) if effective_mode == "deflagration" else None
 
     # Массивы результата
     Rx_list: List[float] = []
@@ -200,10 +200,16 @@ def run_shockwave(ctx: CalculationContext) -> ShockwaveResult:
         # чтобы не делить на ноль и не брать log(0)
         Rx = (r / L_scale) if r > 0 else 1e-12
 
-        if mode == "detonation":
+        if effective_mode == "detonation":
             Px, Ix = _detonation_px_ix(Rx)
         else:
-            Px, Ix = _deflagration_px_ix(Rx, float(Vg), C0, sigma)
+            # Методика (Приказ 412, п.70-71): при дефлаграции вычисляем оба
+            # режима и берём минимум — детонационные значения ограничивают
+            # физически нереалистичный рост Px1/Ix1 в ближней зоне.
+            Px1, Ix1 = _deflagration_px_ix(Rx, float(Vg), C0, sigma)
+            Px2, Ix2 = _detonation_px_ix(Rx)
+            Px = min(Px1, Px2)
+            Ix = min(Ix1, Ix2)
 
         # Перевод безразмерных величин в физические
         dP = Px * P0
@@ -229,8 +235,9 @@ def run_shockwave(ctx: CalculationContext) -> ShockwaveResult:
     # Это критично для engine.py:
     # теперь engine может взять готовые параметры без ручного пересчёта
     ctx.results["shockwave_params"] = {
-        "mode": mode,
-        "range_id": range_id if mode == "deflagration" else None,
+        "mode": effective_mode,
+        "mode_input": mode,
+        "range_id": range_id,
         "Vg_m_s": float(Vg) if Vg is not None else None,
         "P0_Pa": P0,
         "C0_mps": C0,
@@ -240,7 +247,7 @@ def run_shockwave(ctx: CalculationContext) -> ShockwaveResult:
     }
 
     ctx.log(
-        f"[shockwave] mode={mode}, "
+        f"[shockwave] mode={effective_mode} (input={mode}, range_id={range_id}), "
         f"E={E:.6g}, "
         f"L_scale={L_scale:.6g}, "
         f"Vg={float(Vg) if Vg is not None else 'n/a'}"

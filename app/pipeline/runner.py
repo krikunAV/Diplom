@@ -9,15 +9,25 @@ from app.pipeline.models import POUOInput, POUOResult, ProjectInput, ProjectResu
 from app.pipeline.recipes import get_recipe
 
 
-def run_pouo(pouo: POUOInput, cfg: EngineConfig | None = None) -> POUOResult:
+def run_pouo(
+    pouo: POUOInput,
+    cfg: EngineConfig | None = None,
+    fail_fast: bool = True,
+) -> POUOResult:
     """
     Универсальный runner для одного ПООУ.
 
     Не знает ни о каких конкретных сценариях.
     Перебирает pouo.scenario_configs и для каждого:
-      1. строит raw_inputs через sc.build_inputs(pouo, cfg, accumulated)
-      2. запускает get_scenario(sc.scenario_type).run(raw_inputs)
-      3. накапливает intermediate + results для следующих сценариев
+      1. проверяет sc.requires — все нужные ключи должны быть в accumulated
+      2. строит raw_inputs через sc.build_inputs(pouo, cfg, accumulated)
+      3. запускает get_scenario(sc.scenario_type).run(raw_inputs)
+      4. обновляет accumulated, защищая от перезаписи существующих ключей
+      5. проверяет sc.provides — все обещанные ключи должны появиться в accumulated
+
+    fail_fast=True  (по умолчанию): первая ошибка прерывает цепочку.
+    fail_fast=False: все сценарии выполняются независимо, каждый получает
+                     свою запись об ошибке.
     """
     cfg = cfg or EngineConfig()
     result = POUOResult(pouo_input=pouo)
@@ -39,21 +49,82 @@ def run_pouo(pouo: POUOInput, cfg: EngineConfig | None = None) -> POUOResult:
     accumulated: dict = {}
 
     for sc in pouo.scenario_configs:
+
+        # ── 1. Проверка requires ──────────────────────────────────────────────
+        missing_req = sc.requires - accumulated.keys()
+        if missing_req:
+            result.scenarios[sc.scenario_type] = ScenarioResult(
+                scenario_type=sc.scenario_type,
+                ctx=CalculationContext(inputs=pouo.inputs),
+                error=(
+                    f"Сценарий '{sc.scenario_type}' требует ключи "
+                    f"{sorted(missing_req)} в accumulated, но они отсутствуют. "
+                    f"Вероятно, предыдущий сценарий завершился с ошибкой."
+                ),
+            )
+            if fail_fast:
+                break
+            continue
+
+        # ── 2. Подготовка входных данных ─────────────────────────────────────
         try:
             raw_inputs = sc.build_inputs(pouo, cfg, accumulated)
         except Exception as exc:
-            ctx = CalculationContext(inputs=pouo.inputs)
             result.scenarios[sc.scenario_type] = ScenarioResult(
-                scenario_type=sc.scenario_type, ctx=ctx, error=str(exc)
+                scenario_type=sc.scenario_type,
+                ctx=CalculationContext(inputs=pouo.inputs),
+                error=str(exc),
             )
-            break  # ошибка подготовки данных — дальше не считаем
+            if fail_fast:
+                break
+            continue
 
+        # ── 3. Выполнение сценария ────────────────────────────────────────────
         sr = get_scenario(sc.scenario_type).run(raw_inputs)
         result.scenarios[sc.scenario_type] = sr
 
-        if sr.ok:
-            accumulated.update(sr.ctx.intermediate)
-            accumulated.update(sr.ctx.results)
+        if not sr.ok:
+            if fail_fast:
+                break
+            continue
+
+        # ── 4. Обновление accumulated (защита от перезаписи) ─────────────────
+        # Объединяем intermediate и results в один словарь, чтобы
+        # проверить конфликты одним проходом — оба принадлежат этому сценарию.
+        merged = {**sr.ctx.intermediate, **sr.ctx.results}
+        conflicts = accumulated.keys() & merged.keys()
+        if conflicts:
+            result.scenarios[sc.scenario_type] = ScenarioResult(
+                scenario_type=sc.scenario_type,
+                ctx=sr.ctx,
+                error=(
+                    f"Сценарий '{sc.scenario_type}' пытается перезаписать "
+                    f"уже существующие ключи в accumulated: {sorted(conflicts)}. "
+                    f"Проверьте, что сценарии не объявляют одинаковые ключи в provides."
+                ),
+            )
+            if fail_fast:
+                break
+            continue
+
+        accumulated.update(merged)
+
+        # ── 5. Проверка provides ──────────────────────────────────────────────
+        missing_prov = sc.provides - accumulated.keys()
+        if missing_prov:
+            result.scenarios[sc.scenario_type] = ScenarioResult(
+                scenario_type=sc.scenario_type,
+                ctx=sr.ctx,
+                error=(
+                    f"Сценарий '{sc.scenario_type}' должен предоставить "
+                    f"{sorted(missing_prov)}, но не сделал этого. "
+                    f"Проверьте, что все ключи из provides записываются "
+                    f"в ctx.intermediate или ctx.results."
+                ),
+            )
+            if fail_fast:
+                break
+            continue
 
     return result
 
@@ -61,12 +132,13 @@ def run_pouo(pouo: POUOInput, cfg: EngineConfig | None = None) -> POUOResult:
 def run_project(
     project: ProjectInput,
     cfg: EngineConfig | None = None,
+    fail_fast: bool = True,
 ) -> ProjectResult:
     """Запускает расчёт для всего проекта последовательно."""
     cfg = cfg or EngineConfig()
     pr = ProjectResult(project_input=project)
     for pouo in project.pouos:
-        pr.pouo_results.append(run_pouo(pouo, cfg))
+        pr.pouo_results.append(run_pouo(pouo, cfg, fail_fast=fail_fast))
     return pr
 
 

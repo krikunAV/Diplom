@@ -129,9 +129,24 @@ def natgas_outdoor_scenarios() -> List[ScenarioConfig]:
     jet_fire и fireball читают m_dot/Mg из accumulated.
     """
     return [
-        ScenarioConfig("tvs_explosion", _build_tvs_inputs),
-        ScenarioConfig("jet_fire",      _build_jet_fire_inputs),
-        ScenarioConfig("fireball",      _build_fireball_inputs),
+        ScenarioConfig(
+            "tvs_explosion",
+            _build_tvs_inputs,
+            requires=frozenset(),
+            provides=frozenset({"m_dot_kg_s", "Mg_kg"}),
+        ),
+        ScenarioConfig(
+            "jet_fire",
+            _build_jet_fire_inputs,
+            requires=frozenset({"m_dot_kg_s"}),
+            provides=frozenset(),
+        ),
+        ScenarioConfig(
+            "fireball",
+            _build_fireball_inputs,
+            requires=frozenset({"Mg_kg"}),
+            provides=frozenset(),
+        ),
     ]
 
 

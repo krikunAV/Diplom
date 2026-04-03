@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, FrozenSet, List, Optional
 
 from app.core.context import CalculationContext
 from app.core.models import PipeRow
@@ -24,9 +24,20 @@ class ScenarioConfig:
     accumulated — накопленный словарь intermediate+results из уже
     выполненных сценариев. Позволяет jet_fire/fireball использовать
     m_dot/Mg из TVS без прямой зависимости между классами.
+
+    requires — ключи, которые должны присутствовать в accumulated
+               до запуска этого сценария. Runner проверяет их явно
+               и выбрасывает ошибку вместо молчаливого падения.
+
+    provides — ключи, которые сценарий гарантированно добавит
+               в accumulated после успешного выполнения.
+               Используются как документация контракта; runner
+               не проверяет выход — только вход.
     """
     scenario_type: str
     build_inputs: Callable[["POUOInput", Any, dict], dict]
+    requires: FrozenSet[str] = field(default_factory=frozenset)
+    provides: FrozenSet[str] = field(default_factory=frozenset)
 
 
 # ── Результат одного сценария ─────────────────────────────────────────────────

@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
 from app.core.context import CalculationContext
-from app.core.calcs.common.probit import calc_people_probit, calc_building_probit, probit_to_percent
+from app.core.calcs.common.probit import (
+    calc_people_probit,
+    calc_building_probit_pr1,
+    calc_building_probit_pr2,
+    probit_to_percent,
+)
 
 
 # -------------------- helpers --------------------
@@ -187,8 +192,8 @@ def run_probit_zones(ctx: CalculationContext):
         i_plus = float(Iplus[i])
 
         pr_people = calc_people_probit(dp_pa, i_plus)
-        pr_full = calc_building_probit(dp_kpa, center_kpa=40.0)
-        pr_heavy = calc_building_probit(dp_kpa, center_kpa=30.0)
+        pr_full = calc_building_probit_pr1(dp_pa, i_plus)
+        pr_heavy = calc_building_probit_pr2(dp_pa, i_plus)
 
         # Разрыв барабанных перепонок (probit 4)
         pr4 = (-12.6 + 1.524 * math.log(dp_pa)) if dp_pa > 0 else None
