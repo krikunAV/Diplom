@@ -88,43 +88,50 @@ def run_pouo(
                 break
             continue
 
-        # ── 4. Обновление accumulated (защита от перезаписи) ─────────────────
-        # Объединяем intermediate и results в один словарь, чтобы
-        # проверить конфликты одним проходом — оба принадлежат этому сценарию.
-        merged = {**sr.ctx.intermediate, **sr.ctx.results}
-        conflicts = accumulated.keys() & merged.keys()
-        if conflicts:
-            result.scenarios[sc.scenario_type] = ScenarioResult(
-                scenario_type=sc.scenario_type,
-                ctx=sr.ctx,
-                error=(
-                    f"Сценарий '{sc.scenario_type}' пытается перезаписать "
-                    f"уже существующие ключи в accumulated: {sorted(conflicts)}. "
-                    f"Проверьте, что сценарии не объявляют одинаковые ключи в provides."
-                ),
-            )
-            if fail_fast:
-                break
-            continue
+        # ── 4 & 5. Обновление accumulated + проверка provides ────────────────
+        # В accumulated попадают ТОЛЬКО ключи, объявленные в sc.provides.
+        # Это намеренно: jet_fire и fireball оба пишут 'params'/'table'/'zones'
+        # в ctx.results, но ни один из них не объявляет эти ключи в provides —
+        # их данные нужны только отчёту, а не следующим сценариям.
+        if sc.provides:
+            merged = {**sr.ctx.intermediate, **sr.ctx.results}
 
-        accumulated.update(merged)
+            # Защита от перезаписи — только для ключей из provides
+            conflicts = sc.provides & accumulated.keys()
+            if conflicts:
+                result.scenarios[sc.scenario_type] = ScenarioResult(
+                    scenario_type=sc.scenario_type,
+                    ctx=sr.ctx,
+                    error=(
+                        f"Сценарий '{sc.scenario_type}' пытается перезаписать "
+                        f"уже существующие ключи в accumulated: {sorted(conflicts)}. "
+                        f"Проверьте provides в рецепте."
+                    ),
+                )
+                if fail_fast:
+                    break
+                continue
 
-        # ── 5. Проверка provides ──────────────────────────────────────────────
-        missing_prov = sc.provides - accumulated.keys()
-        if missing_prov:
-            result.scenarios[sc.scenario_type] = ScenarioResult(
-                scenario_type=sc.scenario_type,
-                ctx=sr.ctx,
-                error=(
-                    f"Сценарий '{sc.scenario_type}' должен предоставить "
-                    f"{sorted(missing_prov)}, но не сделал этого. "
-                    f"Проверьте, что все ключи из provides записываются "
-                    f"в ctx.intermediate или ctx.results."
-                ),
-            )
-            if fail_fast:
-                break
-            continue
+            # Проверка: все обещанные ключи должны присутствовать в ctx
+            missing_prov = sc.provides - merged.keys()
+            if missing_prov:
+                result.scenarios[sc.scenario_type] = ScenarioResult(
+                    scenario_type=sc.scenario_type,
+                    ctx=sr.ctx,
+                    error=(
+                        f"Сценарий '{sc.scenario_type}' должен предоставить "
+                        f"{sorted(missing_prov)}, но не сделал этого. "
+                        f"Проверьте, что все ключи из provides записываются "
+                        f"в ctx.intermediate или ctx.results."
+                    ),
+                )
+                if fail_fast:
+                    break
+                continue
+
+            # Добавляем в accumulated только объявленные ключи
+            for key in sc.provides:
+                accumulated[key] = merged[key]
 
     return result
 
