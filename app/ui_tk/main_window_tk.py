@@ -495,6 +495,7 @@ class MainWindowTk(tk.Tk):
                 "tank": {
                     "volume_m3": volume_m3,
                     "count": count,
+                    "fill_fraction": 0.8,
                 },
                 "spill": {
                     "area_m2": area_m2,
@@ -756,6 +757,33 @@ class MainWindowTk(tk.Tk):
 
         return "\n".join(lines)
 
+    def _resolve_word_template_path(self, app_dir: Path) -> Path:
+        """
+        ПОУО1 (резервуарный парк) → templatePOUO1.docx.
+        Остальные сценарии → template.docx, затем templatePOUO2.docx, template2.docx.
+        """
+        templates_dir = app_dir / "report" / "templates"
+        pouos_data = self.project_pouos[:] if self.project_pouos else [self.collect_data()]
+        codes = {item.get("scenario_id") for item in pouos_data}
+
+        if codes == {"POUO1"}:
+            candidates = [templates_dir / "templatePOUO1.docx"]
+        else:
+            candidates = [
+                templates_dir / "template.docx",
+                templates_dir / "templatePOUO2.docx",
+                templates_dir / "template2.docx",
+            ]
+
+        for path in candidates:
+            if path.exists():
+                return path
+
+        raise FileNotFoundError(
+            "Не найден шаблон Word. Искали файлы:\n"
+            + "\n".join(f"  • {p}" for p in candidates)
+        )
+
     # ---------------- Word (optional) ----------------
 
     def build_word(self):
@@ -772,9 +800,11 @@ class MainWindowTk(tk.Tk):
         app_dir = Path(__file__).resolve().parents[1]
         root_dir = Path(__file__).resolve().parents[2]
 
-        template_path = app_dir / "report" / "templates" / "template.docx"
-        if not template_path.exists():
-            template_path = app_dir / "report" / "templates" / "template2.docx"
+        try:
+            template_path = self._resolve_word_template_path(app_dir)
+        except FileNotFoundError as e:
+            messagebox.showerror("Ошибка Word", str(e))
+            return
 
         output_path = root_dir / "out" / "Отчет_из_UI.docx"
 

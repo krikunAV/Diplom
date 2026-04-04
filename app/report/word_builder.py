@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, List
@@ -55,6 +56,64 @@ def _pretty_value(v: Any, ndigits: int = 2) -> str:
     if isinstance(v, (int, float)):
         return str(round(v, ndigits))
     return str(v)
+
+
+def _wind_zones_from_m_dot(m_dot: Any) -> Dict[str, Any]:
+    """Эмпирические L и r₀ для облака ГВС (как в методике ПОУО2): L = 25√(M/W), r₀ = 12,5√(M/W)."""
+    try:
+        m = float(m_dot)
+    except (TypeError, ValueError):
+        m = 0.0
+    if m <= 0:
+        return {
+            "L_wind1_m": None, "L_wind3_m": None,
+            "r0_wind1_m": None, "r0_wind3_m": None,
+        }
+
+    def L(W: float) -> float:
+        return round(25.0 * math.sqrt(m / W), 1)
+
+    def r0(W: float) -> float:
+        return round(12.5 * math.sqrt(m / W), 1)
+
+    return {
+        "L_wind1_m": L(1.0), "L_wind3_m": L(3.0),
+        "r0_wind1_m": r0(1.0), "r0_wind3_m": r0(3.0),
+    }
+
+
+def _interp_q_kw_m2(table: Any, r_target: Any) -> float | None:
+    """Линейная интерполяция q(r) по таблице факела."""
+    if not table or r_target is None:
+        return None
+    try:
+        rt = float(r_target)
+    except (TypeError, ValueError):
+        return None
+    rows = []
+    for r in table:
+        try:
+            rm = float(r.get("r_m"))
+            qv = float(r.get("q_kw_m2"))
+        except (TypeError, ValueError):
+            continue
+        rows.append((rm, qv))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: x[0])
+    if rt <= rows[0][0]:
+        return round(rows[0][1], 4)
+    if rt >= rows[-1][0]:
+        return round(rows[-1][1], 4)
+    for i in range(len(rows) - 1):
+        r0, q0 = rows[i]
+        r1, q1 = rows[i + 1]
+        if r0 <= rt <= r1:
+            if r1 == r0:
+                return round(q0, 4)
+            t = (rt - r0) / (r1 - r0)
+            return round(q0 + t * (q1 - q0), 4)
+    return None
 
 
 def _pretty_dict(d: Dict[str, Any], ndigits: int = 2) -> List[Dict[str, str]]:
@@ -200,30 +259,40 @@ def _build_release_block(results: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_jetfire_block(results: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Подготовка блока факельного горения.
-    """
-    jf = (results or {}).get("jet_fire", {}) or {}
-    params = jf.get("params", {}) or {}
-
-    table = []
-    for row in (jf.get("table") or []):
-        table.append({
+def _jetfire_table_rows(raw_table: Any) -> List[Dict[str, Any]]:
+    out = []
+    for row in (raw_table or []):
+        out.append({
             "r_m": _round_if_number(row.get("r_m")),
             "tau": _round_if_number(row.get("tau"), 6),
             "Fq": _round_if_number(row.get("Fq"), 6),
             "q_kw_m2": _round_if_number(row.get("q_kw_m2"), 4),
         })
+    return out
 
+
+def _jetfire_zones_rows(raw_zones: Any) -> List[Dict[str, str]]:
     zones = []
-    for z in (jf.get("zones") or []):
+    for z in (raw_zones or []):
         zones.append({
             "q_thr_kw_m2": _round_if_number(z.get("q_thr_kw_m2"), 2),
             "r_m": _pretty_value(z.get("r_m")),
         })
+    return zones
 
-    return {
+
+def _build_jetfire_block(results: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Подготовка блока факельного горения.
+    Для СУГ (tank_park) в results["jet_fire"] может быть вложенный блок peak.
+    """
+    jf = (results or {}).get("jet_fire", {}) or {}
+    params = jf.get("params", {}) or {}
+
+    table = _jetfire_table_rows(jf.get("table"))
+    zones = _jetfire_zones_rows(jf.get("zones"))
+
+    out: Dict[str, Any] = {
         "params": {
             "M_kg_s": _round_if_number(params.get("M_kg_s"), 4),
             "LF_m": _round_if_number(params.get("LF_m"), 2),
@@ -234,6 +303,49 @@ def _build_jetfire_block(results: Dict[str, Any]) -> Dict[str, Any]:
         "zones": zones,
         "skip_reason": jf.get("skip_reason"),
     }
+
+    peak_raw = jf.get("peak") or {}
+    ppar = peak_raw.get("params") or {}
+    if ppar:
+        out["peak"] = {
+            "params": {
+                "M_kg_s": _round_if_number(ppar.get("M_kg_s"), 4),
+                "LF_m": _round_if_number(ppar.get("LF_m"), 2),
+                "DF_m": _round_if_number(ppar.get("DF_m"), 2),
+                "Ef_kw_m2": _round_if_number(ppar.get("Ef_kw_m2"), 2),
+            },
+            "table": _jetfire_table_rows(peak_raw.get("table")),
+            "zones": _jetfire_zones_rows(peak_raw.get("zones")),
+        }
+
+    def _q_near(table_rows: List[Dict[str, Any]], r_tgt: float) -> Any:
+        best_q = None
+        best_d = 1e9
+        for row in table_rows:
+            rm = row.get("r_m")
+            if rm is None:
+                continue
+            try:
+                d = abs(float(rm) - r_tgt)
+            except (TypeError, ValueError):
+                continue
+            if d < best_d:
+                best_d = d
+                best_q = row.get("q_kw_m2")
+        return best_q if best_d < 0.51 else None
+
+    out["q_r5_kw_m2"] = _round_if_number(_q_near(table, 5.0), 4)
+    out["q_r10_kw_m2"] = _round_if_number(_q_near(table, 10.0), 4)
+
+    # Шаблон ПОУО1 ожидает peak; для прочих сценариев дублируем установившийся режим
+    if not out.get("peak") or not (out.get("peak") or {}).get("params"):
+        out["peak"] = {
+            "params": dict(out["params"]),
+            "table": list(out["table"]),
+            "zones": list(out["zones"]),
+        }
+
+    return out
 
 
 def _build_fireball_block(results: Dict[str, Any]) -> Dict[str, Any]:
@@ -318,10 +430,21 @@ def _build_tvs_block(results: Dict[str, Any]) -> Dict[str, Any]:
 
     max_delta_p_kpa = None
     max_delta_r_m = None
+    max_iplus_pa_s = None
     if tvs_table:
         max_row = max(tvs_table, key=lambda r: r.get("deltaP_Pa") or 0.0)
         max_delta_p_kpa = _round_if_number((max_row.get("deltaP_Pa") or 0.0) / 1000.0, 4)
         max_delta_r_m = max_row.get("r_m")
+        max_iplus_row = max(tvs_table, key=lambda r: r.get("Iplus_Pa_s") or 0.0)
+        max_iplus_pa_s = _round_if_number(max_iplus_row.get("Iplus_Pa_s"), 2)
+
+    # Радиус зоны «лёгкий вред здоровью» (ΔP ≥ people_light_kPa = 12 кПа)
+    _people_light_r = res.get("zones_people", {}).get("people_light_kPa")
+    zone_light_harm_r_m = (
+        _round_if_number(float(_people_light_r), 1)
+        if isinstance(_people_light_r, (int, float))
+        else None
+    )
 
     zones_buildings = _pad_building_zones(
         _pretty_building_zones(res.get("zones_buildings", {})),
@@ -341,6 +464,8 @@ def _build_tvs_block(results: Dict[str, Any]) -> Dict[str, Any]:
 
         "max_delta_p_kpa": max_delta_p_kpa,
         "max_delta_r_m": max_delta_r_m,
+        "max_iplus_pa_s": max_iplus_pa_s,
+        "zone_light_harm_r_m": zone_light_harm_r_m,
 
         "zones_glass": _pretty_dict(res.get("zones_glass", {})),
         "zones_people": _pretty_dict(res.get("zones_people", {})),
@@ -388,7 +513,13 @@ def _build_tank_park_block(results: Dict[str, Any]) -> Dict[str, Any]:
     """
     tp = (results or {}).get("tank_park", {}) or {}
     inter = tp.get("intermediate", {}) or {}
-    fuel_id = tp.get("fuel_id", "")
+    tp_in = tp.get("inputs", {}) or {}
+    meta = tp_in.get("meta", {}) or {}
+    fuel_id = str(meta.get("fuel_id", "") or "")
+
+    tank_in = tp_in.get("tank", {}) or {}
+    lpg_in = tp_in.get("lpg", {}) or {}
+    site_in = tp_in.get("site", {}) or {}
 
     pe = (results or {}).get("people_exposure", {}) or {}
 
@@ -402,6 +533,100 @@ def _build_tank_park_block(results: Dict[str, Any]) -> Dict[str, Any]:
             }
             for z in (pe.get(key) or [])
         ]
+
+    vol = tank_in.get("volume_m3")
+    if vol is None:
+        vol = inter.get("volume_m3")
+    cnt = tank_in.get("count")
+    if cnt is None:
+        cnt = inter.get("count")
+    try:
+        fill = float(tank_in.get("fill_fraction", 0.8) or 0.8)
+    except (TypeError, ValueError):
+        fill = 0.8
+
+    V_liquid_m3 = None
+    if vol is not None and cnt is not None:
+        try:
+            V_liquid_m3 = float(vol) * int(cnt) * fill
+        except (TypeError, ValueError):
+            V_liquid_m3 = None
+
+    try:
+        exp_f = float(lpg_in.get("expansion_factor", 250) or 250)
+    except (TypeError, ValueError):
+        exp_f = 250.0
+    try:
+        rho_v = float(lpg_in.get("rho_vapor_kg_m3", 1.83) or 1.83)
+    except (TypeError, ValueError):
+        rho_v = 1.83
+
+    V_gvs_m3 = (V_liquid_m3 * exp_f) if V_liquid_m3 is not None else None
+    m_gvs_kg = (V_gvs_m3 * rho_v) if V_gvs_m3 is not None else None
+
+    nozzle_r = lpg_in.get("nozzle_radius_m")
+    A_hol = None
+    if nozzle_r is not None:
+        try:
+            nr = float(nozzle_r)
+            if nr > 0:
+                A_hol = round(math.pi * nr * nr, 6)
+        except (TypeError, ValueError):
+            pass
+
+    P_v = lpg_in.get("P_vessel_Pa")
+    P_c = lpg_in.get("P_crit_Pa")
+    PR1 = PR2 = None
+    P_vessel_MPa = P_crit_MPa = P_atm_MPa = None
+    try:
+        P_atm = float((tp_in.get("env") or {}).get("P0_Pa", 101_325) or 101_325)
+        P_atm_MPa = round(P_atm / 1e6, 3)
+    except (TypeError, ValueError):
+        P_atm = 101_325.0
+        P_atm_MPa = round(P_atm / 1e6, 3)
+    try:
+        if P_v is not None and P_c is not None and float(P_c) != 0:
+            PR1 = round(float(P_v) / float(P_c), 9)
+    except (TypeError, ValueError):
+        pass
+    try:
+        if P_c is not None and float(P_c) != 0:
+            PR2 = round(P_atm / float(P_c), 9)
+    except (TypeError, ValueError):
+        pass
+    try:
+        if P_v is not None:
+            P_vessel_MPa = round(float(P_v) / 1e6, 2)
+    except (TypeError, ValueError):
+        pass
+    try:
+        if P_c is not None:
+            P_crit_MPa = round(float(P_c) / 1e6, 2)
+    except (TypeError, ValueError):
+        pass
+
+    wind = _wind_zones_from_m_dot(inter.get("m_dot_kg_s"))
+
+    jf_raw = (results or {}).get("jet_fire") or {}
+    jf_tab = jf_raw.get("table") or []
+
+    def _site_q(key: str) -> float | None:
+        d = site_in.get(key)
+        return _interp_q_kw_m2(jf_tab, d)
+
+    # Радиус зоны 7 кВт/м² (санитарные потери) из таблицы зон факела
+    zone_sanitary_r_m = None
+    for z in (jf_raw.get("zones") or []):
+        try:
+            if abs(float(z.get("q_thr_kw_m2", 0)) - 7.0) < 0.06:
+                zr = z.get("r_m")
+                zone_sanitary_r_m = _round_if_number(float(zr), 1) if zr is not None else None
+                break
+        except (TypeError, ValueError):
+            continue
+
+    jf_params = jf_raw.get("params") or {}
+    direct_flame_r_m = _round_if_number(jf_params.get("DF_m"), 1)
 
     return {
         "fuel_id":        fuel_id,
@@ -417,6 +642,26 @@ def _build_tank_park_block(results: Dict[str, Any]) -> Dict[str, Any]:
         "m_flash_kg":     _round_if_number(inter.get("m_flash_kg"), 2),
         "m_pool_evap_kg": _round_if_number(inter.get("m_pool_evap_kg"), 2),
         "m_dot_kg_s":     _round_if_number(inter.get("m_dot_kg_s"), 4),
+        "m_dot_peak_kg_s": _round_if_number(inter.get("m_dot_peak_kg_s"), 2),
+        "fill_fraction":  _round_if_number(fill, 2),
+        "V_liquid_m3":    _round_if_number(V_liquid_m3, 2),
+        "V_gvs_m3":       _round_if_number(V_gvs_m3, 1),
+        "m_gvs_kg":       _round_if_number(m_gvs_kg, 1),
+        "nozzle_area_m2": A_hol,
+        "PR1":            PR1,
+        "PR2":            PR2,
+        "P_vessel_MPa":   P_vessel_MPa,
+        "P_crit_MPa":     P_crit_MPa,
+        "P_atm_MPa":      P_atm_MPa,
+        "L_wind1_m":      wind["L_wind1_m"],
+        "L_wind3_m":      wind["L_wind3_m"],
+        "r0_wind1_m":     wind["r0_wind1_m"],
+        "r0_wind3_m":     wind["r0_wind3_m"],
+        "q_kpp_kw_m2":    _round_if_number(_site_q("dist_kpp_m"), 2),
+        "q_sklad_kw_m2":  _round_if_number(_site_q("dist_sklad_m"), 2),
+        "q_kotelnaya_kw_m2": _round_if_number(_site_q("dist_kotelnaya_m"), 2),
+        "zone_sanitary_r_m": zone_sanitary_r_m,
+        "direct_flame_r_m": direct_flame_r_m,
         # люди
         "people_density_per_ha": pe.get("density_per_ha", 0),
         "people_jet_fire":  _pe_zones("jet_fire"),
@@ -456,6 +701,20 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
         raw_inputs = _to_dict(getattr(p, "inputs", {}) or {})
         raw_results = _to_dict(getattr(p, "results", {}) or {})
         raw_pipes = _to_dict(getattr(p, "pipes", []) or [])
+
+        merged_inputs = dict(raw_inputs)
+        _tpr = raw_results.get("tank_park") or {}
+        _tpi = _tpr.get("inputs") or {}
+        if _tpi.get("lpg"):
+            merged_inputs["lpg"] = _to_dict(_tpi["lpg"])
+        if _tpi.get("site"):
+            merged_inputs["site"] = _to_dict(_tpi["site"])
+        if _tpi.get("tank"):
+            _ut = dict(merged_inputs.get("tank") or {})
+            for _k, _v in _to_dict(_tpi["tank"]).items():
+                if _v is not None:
+                    _ut[_k] = _v
+            merged_inputs["tank"] = _ut
 
         # ---------------- Подготовка труб для шаблона ----------------
         # В шаблоне используется pipe.d_inner_m,
@@ -504,8 +763,8 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             "fuel_title": getattr(fuel, "title", ""),
             "eud0_j_per_kg": getattr(fuel, "eud0_j_per_kg", 0.0),
 
-            # Сырой слой
-            "inputs": raw_inputs,
+            # Сырой слой (для tank_park дополняем lpg/site/fill из снимка inputs расчёта)
+            "inputs": merged_inputs,
             "results": raw_results,
 
             # Подготовленные трубы для таблицы Word
@@ -532,7 +791,7 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             "has_tvs":       bool(tvs_block        and not tvs_block.get("skip_reason")),
             "has_pool_fire": bool(pool_fire_block  and not pool_fire_block.get("skip_reason")
                                   and pool_fire_block.get("zones")),
-            "has_tank_park": bool(tank_park_block  and tank_park_block.get("fuel_id")),
+            "has_tank_park": bool(raw_results.get("tank_park")),
             "is_tank_park":  bool(raw_results.get("tank_park")),
             "has_error":     bool(raw_results.get("error")),
             "error_text":    raw_results.get("error"),

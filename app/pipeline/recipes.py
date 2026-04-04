@@ -154,6 +154,30 @@ def natgas_outdoor_scenarios() -> List[ScenarioConfig]:
 
 # ── Резервуарный парк ─────────────────────────────────────────────────────────
 
+# Справочные величины для текста отчёта ПОУО1 (СУГ) — подставляются в Word;
+# пользователь может переопределить через pouo.inputs["lpg"] / ["site"].
+_DEFAULT_LPG_REPORT_PROPS: Dict[str, Any] = {
+    "equiv_tnt_kg": 10.0,
+    "P_vessel_Pa": 1_560_000.0,
+    "P_crit_Pa": 4_190_000.0,
+    "T_crit_K": 370.0,
+    "M_kg_kmol": 44.0,
+    "rho_vapor_kg_m3": 1.83,
+    "T_calc_C": 20.0,
+    "expansion_factor": 250.0,
+    "lower_flammability_pct": 7.7,
+    "gamma": 1.257,
+    "Ef_surface_W_m2": 40_000.0,
+    "nozzle_radius_m": 0.23,
+}
+
+_DEFAULT_SITE_DISTANCES_M: Dict[str, float] = {
+    "dist_kpp_m": 16.0,
+    "dist_sklad_m": 24.0,
+    "dist_kotelnaya_m": 33.0,
+}
+
+
 def _build_tank_park_inputs(
     pouo: POUOInput,
     cfg: EngineConfig,
@@ -169,6 +193,7 @@ def _build_tank_park_inputs(
 
     tank = pouo.inputs.get("tank", {})
     spill = pouo.inputs.get("spill", {})
+    fill_fraction = float(tank.get("fill_fraction", 0.8) or 0.8)
 
     if pouo.fuel_id == "diesel":
         fuel_section: Dict[str, Any] = {
@@ -215,22 +240,24 @@ def _build_tank_park_inputs(
         "people_density_per_ha": float(exposure_raw.get("people_density_per_ha", 0.0)),
     }
 
-    return {
+    out: Dict[str, Any] = {
         "meta": {
             "scenario_id": f"TANKPARK_{pouo.code}",
             "fuel_id":     pouo.fuel_id,
             "notes":       pouo.title,
         },
         "tank": {
-            "volume_m3": float(tank.get("volume_m3", 0.0)),
-            "count":     int(tank.get("count", 1)),
+            "volume_m3":     float(tank.get("volume_m3", 0.0)),
+            "count":         int(tank.get("count", 1)),
+            "fill_fraction": fill_fraction,
         },
         "spill": {
-            "area_m2":           float(spill.get("area_m2", 0.0)),
-            "duration_s":        float(spill.get("duration_s", 3600.0)),
-            "eta":               1.0,                      # без ветра
-            "flash_fraction":    cfg.lpg_flash_fraction,
-            "pool_evap_fraction": cfg.lpg_pool_evap_fraction,
+            "area_m2":            float(spill.get("area_m2", 0.0)),
+            "duration_s":         float(spill.get("duration_s", 3600.0)),
+            "eta":                1.0,                      # без ветра
+            "flash_fraction":     float(spill.get("flash_fraction", cfg.lpg_flash_fraction)),
+            "pool_evap_fraction": float(spill.get("pool_evap_fraction", cfg.lpg_pool_evap_fraction)),
+            "peak_duration_s":    float(spill.get("peak_duration_s", 2.5)),
         },
         "fuel":      fuel_section,
         "substance": substance,
@@ -249,6 +276,24 @@ def _build_tank_park_inputs(
         },
         "exposure": exposure_section,
     }
+
+    if pouo.fuel_id == "lpg":
+        user_lpg = dict(pouo.inputs.get("lpg") or {})
+        out["lpg"] = {
+            **_DEFAULT_LPG_REPORT_PROPS,
+            "rho_liq_kg_m3": float(fuel.rho_liq),
+            **user_lpg,
+        }
+        user_site = dict(pouo.inputs.get("site") or {})
+        merged_site = dict(_DEFAULT_SITE_DISTANCES_M)
+        for k, v in user_site.items():
+            try:
+                merged_site[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+        out["site"] = merged_site
+
+    return out
 
 
 def tank_park_scenarios() -> List[ScenarioConfig]:

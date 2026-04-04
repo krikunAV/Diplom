@@ -75,12 +75,26 @@ def _run_jet_fire_tank(ctx: CalculationContext) -> None:
     Струйный факел из вскипевшего СУГ (lpg).
     m_dot = m_flash / duration_s.
     Ef = 130 кВт/м² (ГОСТ Табл.Б.1, пропан).
+    K = 13,5 — паровая фаза СУГ/СПГ (ГОСТ Р 12.3.047-2012, Прил. Б).
+    Дополнительно: пиковый режим (m_dot_peak) для короткого начального выброса.
     """
     m_dot = float(ctx.intermediate.get("m_dot_kg_s", 0.0))
+    m_dot_peak = float(ctx.intermediate.get("m_dot_peak_kg_s", m_dot))
     Ef = float(ctx.inputs["fuel"].get("Ef_jet_kw_m2", 130.0))
-    result = calc_jetfire_by_M(M_kg_s=m_dot, Ef_kw_m2=Ef)
-    ctx.results["jet_fire"] = result
-    ctx.log(f"[jet_fire_tank] m_dot={m_dot:.4f} кг/с, Ef={Ef} кВт/м²")
+    K_vapor = 13.5
+
+    steady = calc_jetfire_by_M(M_kg_s=m_dot, Ef_kw_m2=Ef, K=K_vapor)
+    peak = calc_jetfire_by_M(M_kg_s=m_dot_peak, Ef_kw_m2=Ef, K=K_vapor)
+    steady["peak"] = {
+        "params": peak.get("params", {}),
+        "table": peak.get("table", []),
+        "zones": peak.get("zones", []),
+    }
+    ctx.results["jet_fire"] = steady
+    ctx.log(
+        f"[jet_fire_tank] m_dot_peak={m_dot_peak:.4f} кг/с, m_dot={m_dot:.4f} кг/с, "
+        f"Ef={Ef} кВт/м², K={K_vapor}"
+    )
 
 
 # ── Списки модулей по топливу ─────────────────────────────────────────────────

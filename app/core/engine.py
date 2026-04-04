@@ -64,11 +64,15 @@ def _pouo_result_to_legacy(p: POUO, pouo_result) -> None:
         inter = ctx.intermediate
         res = ctx.results
 
+        _rel_inputs = ctx.inputs.get("release", {}) if ctx.inputs else {}
         p.results["release"] = {
             "accident_pipe": (p.pipes[0].name if p.pipes else ""),
             "P_up_kpa": float(p.inputs.get("P0_kpa", 0.0)),
             "d_hole_mm": float(p.pipes[0].diameter_mm) if p.pipes else 0.0,
             "t_shutoff_s": float(p.inputs.get("t_shutoff_s", 0.0)),
+            # газовые константы (нужны шаблону для отображения формул)
+            "T_K":       _rel_inputs.get("T_K"),
+            "R0_J_kgK":  _rel_inputs.get("R0_J_kgK"),
             # intermediate
             "F_m2":                    inter.get("F_m2"),
             "v_g_m3_kg":               inter.get("v_g_m3_kg"),
@@ -145,6 +149,7 @@ def _pouo_result_to_legacy(p: POUO, pouo_result) -> None:
                 "m_cloud_kg":    inter.get("m_cloud_kg"),
                 "Mg_kg":         inter.get("Mg_kg"),
                 "m_dot_kg_s":    inter.get("m_dot_kg_s"),
+                "m_dot_peak_kg_s": inter.get("m_dot_peak_kg_s"),
                 "E_J":           inter.get("E_J"),
             }
 
