@@ -335,12 +335,23 @@ def _section_people_exposure(pe: dict) -> list[str]:
     return lines
 
 
-def build_calculation_debug_output(results: dict) -> str:
+def build_calculation_debug_output(
+    results: dict,
+    word_template_hint: str | None = None,
+) -> str:
     """
     Принимает p.results одного ПОУО.
     Возвращает форматированный текст для вывода в UI.
+
+    word_template_hint — опционально (обычно только для первого ПОУО в проекте):
+    строка из word_builder.word_template_debug_line, например
+    «Используемый шаблон Word: templatePOUO2.docx (сценарий POUO2)».
     """
     lines = []
+
+    if word_template_hint:
+        lines.append(word_template_hint)
+        lines.append("")
 
     # --- Заголовок ---
     meta = results.get("meta") or {}

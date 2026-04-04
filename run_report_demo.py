@@ -1,7 +1,8 @@
 # run_report_demo.py
 from app.core.models import Project, POUO, PipeRow
-from app.report.word_builder import render_report
+from app.report.word_builder import render_report_for_project
 from app.core.engine import compute_project  # <-- важно
+
 
 def main():
     print("1) Собираю Project...")
@@ -27,22 +28,7 @@ def main():
                     PipeRow(name="Участок 1", length_m=30, diameter_mm=57, pressure_kpa=500, is_accident=True),
                     PipeRow(name="Участок 2", length_m=12, diameter_mm=32, pressure_kpa=500, is_accident=False),
                 ],
-                results={}
-            ),
-            POUO(
-                code="POUO3",
-                title="Котельная: внутренний газопровод СД (помещение)",
-                is_indoor=True,
-                fuel_id="methane",
-                inputs={
-                    "P0_kpa": 20,
-                    "t_shutoff_s": 60,
-                    "V_room_m3": 900,
-                },
-                pipes=[
-                    PipeRow(name="Внутр. участок", length_m=10, diameter_mm=25, pressure_kpa=20, is_accident=True),
-                ],
-                results={}
+                results={},
             ),
         ],
     )
@@ -57,14 +43,13 @@ def main():
         if "release" in p.results:
             print("G:", p.results["release"].get("G_kg_s"), "m_release:", p.results["release"].get("m_release_kg"))
 
-    print("\n3) Рендерю Word...")
-    render_report(
-        template_path="app/report/templates/template.docx",
+    print("\n3) Рендерю Word (шаблон по карте POUO2 → templatePOUO2.docx)...")
+    name = render_report_for_project(
+        project,
         output_path="out/Отчет_тестовый.docx",
-        project=project
     )
+    print("4) Готово: out/Отчет_тестовый.docx, шаблон:", name)
 
-    print("4) Готово: out/Отчет_тестовый.docx")
 
 if __name__ == "__main__":
     main()

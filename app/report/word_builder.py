@@ -5,7 +5,83 @@ import logging
 import math
 import os
 from dataclasses import asdict, is_dataclass
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+# Один код сценария (как в POUO.code / SCENARIOS) → один файл шаблона в app/report/templates/
+WORD_TEMPLATE_BY_SCENARIO: Dict[str, str] = {
+    "POUO1": "templatePOUO1.docx",
+    "POUO2": "templatePOUO2.docx",
+    "POUO3": "templatePOUO3.docx",
+    "POUO4": "templatePOUO4.docx",
+    "POUO5": "templatePOUO5.docx",
+    "POUO6": "templatePOUO6.docx",
+}
+
+
+def default_word_templates_dir() -> Path:
+    return Path(__file__).resolve().parent / "templates"
+
+
+def _unique_scenario_code(project: Any) -> str:
+    """Один тип ПОУО на отчёт: все p.code должны совпадать."""
+    pouos = getattr(project, "pouos", None) or []
+    if not pouos:
+        raise ValueError("В проекте нет ПОУО — нечего включать в отчёт.")
+    codes = {p.code for p in pouos}
+    if len(codes) > 1:
+        raise ValueError(
+            "В одном Word-отчёте допустимы только ПОУО одного типа. "
+            f"Сейчас: {', '.join(sorted(codes))}. "
+            "Оставьте в проекте один сценарий или формируйте отчёты по отдельности."
+        )
+    return next(iter(codes))
+
+
+def word_template_filename_for_scenario(scenario_code: str) -> str:
+    fn = WORD_TEMPLATE_BY_SCENARIO.get(scenario_code)
+    if not fn:
+        known = ", ".join(sorted(WORD_TEMPLATE_BY_SCENARIO))
+        raise ValueError(
+            f"Для сценария «{scenario_code}» не задан шаблон Word. "
+            f"Известные сценарии: {known}."
+        )
+    return fn
+
+
+def resolve_word_template_path(
+    project: Any,
+    templates_dir: str | Path | None = None,
+) -> Tuple[Path, str]:
+    """
+    Возвращает (полный путь к файлу, имя файла).
+    Нет файла — FileNotFoundError с указанием сценария и пути.
+    """
+    base = Path(templates_dir) if templates_dir else default_word_templates_dir()
+    code = _unique_scenario_code(project)
+    filename = word_template_filename_for_scenario(code)
+    path = base / filename
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Не найден шаблон для сценария {code}: ожидался файл\n  {path}"
+        )
+    return path, filename
+
+
+def word_template_debug_line(project: Any, templates_dir: str | Path | None = None) -> str:
+    """Строка для окна отладки: какой шаблон соответствует проекту и существует ли файл."""
+    base = Path(templates_dir) if templates_dir else default_word_templates_dir()
+    try:
+        code = _unique_scenario_code(project)
+        filename = word_template_filename_for_scenario(code)
+    except ValueError as e:
+        return f"Шаблон Word: не определён ({e})"
+    path = base / filename
+    if path.is_file():
+        return f"Используемый шаблон Word: {filename}  (сценарий {code})"
+    return (
+        f"Ожидаемый шаблон Word: {filename}  (сценарий {code}) — файл не найден:\n  {path}"
+    )
 
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
@@ -208,6 +284,55 @@ def _safe_inline_image(doc: DocxTemplate, path: str, width_mm: int = 150):
     if path and os.path.exists(path):
         return InlineImage(doc, path, width=Mm(width_mm))
     return None
+
+
+class DotDict(dict):
+    """
+    Словарь с доступом по атрибуту для Jinja/docxtpl (p.inputs.lpg.M_kg_kmol).
+
+    Обычный dict в Jinja не даёт .lpg — только ['lpg'], отсюда была ошибка
+    «'dict object' has no attribute 'lpg'».
+
+    Нет ключа — возвращается пустой DotDict (цепочка не падает); печать пустого — "".
+    """
+
+    def __getattr__(self, key: str) -> Any:
+        if key.startswith("_"):
+            raise AttributeError(key)
+        try:
+            return self[key]
+        except KeyError:
+            return DotDict()
+
+    def __str__(self) -> str:
+        return "" if len(self) == 0 else super().__str__()
+
+    def __repr__(self) -> str:
+        return "" if len(self) == 0 else super().__repr__()
+
+    def __format__(self, format_spec: str) -> str:
+        return "" if len(self) == 0 else str(self)
+
+
+def _dot_for_jinja(obj: Any) -> Any:
+    """
+    Рекурсивно оборачивает dict → DotDict для шаблона; скаляры и InlineImage не трогаем.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, InlineImage):
+        return obj
+    if isinstance(obj, DotDict):
+        return obj
+    if isinstance(obj, dict):
+        return DotDict({k: _dot_for_jinja(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return [_dot_for_jinja(x) for x in obj]
+    if isinstance(obj, tuple):
+        return tuple(_dot_for_jinja(x) for x in obj)
+    return obj
 
 
 def _build_release_block(results: Dict[str, Any]) -> Dict[str, Any]:
@@ -682,11 +807,11 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
     - добавляем пути и InlineImage для графиков.
     """
     ctx: Dict[str, Any] = {
-        "project": {
+        "project": _dot_for_jinja({
             "name": getattr(project, "name", ""),
             "object_name": getattr(project, "object_name", ""),
             "address": getattr(project, "address", ""),
-        },
+        }),
         "pouos": [],
     }
 
@@ -804,7 +929,7 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             p_dict["jetfire_chart_img"] = _safe_inline_image(doc, jetfire_path, width_mm=150)
             p_dict["fireball_chart_img"] = _safe_inline_image(doc, fireball_path, width_mm=150)
 
-        ctx["pouos"].append(p_dict)
+        ctx["pouos"].append(_dot_for_jinja(p_dict))
 
     return ctx
 
@@ -831,3 +956,17 @@ def render_report(template_path: str, output_path: str, project) -> None:
     doc.save(output_path)
 
     logger.debug("Отчёт сохранён")
+
+
+def render_report_for_project(
+    project: Any,
+    output_path: str,
+    templates_dir: str | Path | None = None,
+) -> str:
+    """
+    Подбирает шаблон по единственному типу ПОУО в проекте, рендерит отчёт.
+    Возвращает имя использованного файла шаблона.
+    """
+    template_path, filename = resolve_word_template_path(project, templates_dir)
+    render_report(str(template_path), output_path, project)
+    return filename

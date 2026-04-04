@@ -25,10 +25,11 @@ def _fmt_zone_radius(val) -> str:
 
 try:
     from app.core.models import Project, POUO, PipeRow
-    from app.report.word_builder import render_report
+    from app.report.word_builder import render_report_for_project, word_template_debug_line
     HAS_REPORT = True
 except Exception:
     HAS_REPORT = False
+    word_template_debug_line = None  # type: ignore[assignment,misc]
 
 
 class MainWindowTk(tk.Tk):
@@ -258,9 +259,14 @@ class MainWindowTk(tk.Tk):
         txt.configure(xscrollcommand=scroll_x.set)
         scroll_x.pack(fill="x", padx=8, pady=(0, 8))
 
-        all_text_parts = []
-        for p in project.pouos:
-            all_text_parts.append(build_calculation_debug_output(p.results))
+        all_text_parts: list[str] = []
+        for i, p in enumerate(project.pouos):
+            hint = (
+                word_template_debug_line(project)
+                if (i == 0 and HAS_REPORT and word_template_debug_line is not None)
+                else None
+            )
+            all_text_parts.append(build_calculation_debug_output(p.results, word_template_hint=hint))
 
         full_text = "\n\n".join(all_text_parts)
         txt.insert("1.0", full_text if full_text.strip() else "Нет данных.")
@@ -757,33 +763,6 @@ class MainWindowTk(tk.Tk):
 
         return "\n".join(lines)
 
-    def _resolve_word_template_path(self, app_dir: Path) -> Path:
-        """
-        ПОУО1 (резервуарный парк) → templatePOUO1.docx.
-        Остальные сценарии → template.docx, затем templatePOUO2.docx, template2.docx.
-        """
-        templates_dir = app_dir / "report" / "templates"
-        pouos_data = self.project_pouos[:] if self.project_pouos else [self.collect_data()]
-        codes = {item.get("scenario_id") for item in pouos_data}
-
-        if codes == {"POUO1"}:
-            candidates = [templates_dir / "templatePOUO1.docx"]
-        else:
-            candidates = [
-                templates_dir / "template.docx",
-                templates_dir / "templatePOUO2.docx",
-                templates_dir / "template2.docx",
-            ]
-
-        for path in candidates:
-            if path.exists():
-                return path
-
-        raise FileNotFoundError(
-            "Не найден шаблон Word. Искали файлы:\n"
-            + "\n".join(f"  • {p}" for p in candidates)
-        )
-
     # ---------------- Word (optional) ----------------
 
     def build_word(self):
@@ -799,22 +778,16 @@ class MainWindowTk(tk.Tk):
 
         app_dir = Path(__file__).resolve().parents[1]
         root_dir = Path(__file__).resolve().parents[2]
-
-        try:
-            template_path = self._resolve_word_template_path(app_dir)
-        except FileNotFoundError as e:
-            messagebox.showerror("Ошибка Word", str(e))
-            return
-
+        templates_dir = app_dir / "report" / "templates"
         output_path = root_dir / "out" / "Отчет_из_UI.docx"
 
         try:
-            render_report(
-                template_path=str(template_path),
+            used_name = render_report_for_project(
+                project,
                 output_path=str(output_path),
-                project=project,
+                templates_dir=templates_dir,
             )
-            messagebox.showinfo("Готово", f"Создан файл:\n{output_path}")
+            messagebox.showinfo("Готово", f"Создан файл:\n{output_path}\nШаблон: {used_name}")
         except Exception as e:
             messagebox.showerror("Ошибка Word", str(e))
 
