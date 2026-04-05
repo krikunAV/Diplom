@@ -25,7 +25,7 @@ def _fmt_zone_radius(val) -> str:
 
 try:
     from app.core.models import Project, POUO, PipeRow
-    from app.report.word_builder import render_report_for_project, word_template_debug_line
+    from app.report.word_builder import render_full_report, word_template_debug_line
     HAS_REPORT = True
 except Exception:
     HAS_REPORT = False
@@ -782,12 +782,12 @@ class MainWindowTk(tk.Tk):
         output_path = root_dir / "out" / "Отчет_из_UI.docx"
 
         try:
-            used_name = render_report_for_project(
+            render_full_report(
                 project,
                 output_path=str(output_path),
                 templates_dir=templates_dir,
             )
-            messagebox.showinfo("Готово", f"Создан файл:\n{output_path}\nШаблон: {used_name}")
+            messagebox.showinfo("Готово", f"Создан полный отчёт (все сценарии):\n{output_path}")
         except Exception as e:
             messagebox.showerror("Ошибка Word", str(e))
 

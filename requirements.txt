@@ -1,7 +1,9 @@
 # Word templates + rendering
 docxtpl>=0.16.7
 python-docx>=1.1.2
+docxcompose>=2.0.0
 Jinja2>=3.1.2
+docx2pdf>=0.1.8
 
 # Charts
 matplotlib>=3.7.0

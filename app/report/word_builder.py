@@ -1,12 +1,21 @@
 # app/report/word_builder.py
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import os
+import tempfile
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
+
+from docx import Document as _DocxDocument
+from docx.enum.section import WD_ORIENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 # Один код сценария (как в POUO.code / SCENARIOS) → один файл шаблона в app/report/templates/
 WORD_TEMPLATE_BY_SCENARIO: Dict[str, str] = {
@@ -18,22 +27,37 @@ WORD_TEMPLATE_BY_SCENARIO: Dict[str, str] = {
     "POUO6": "templatePOUO6.docx",
 }
 
+# Титульный лист (при необходимости замените на реквизиты своего ВУЗа)
+TITLE_PAGE_UNIVERSITY = (
+    "Федеральное государственное автономное образовательное учреждение высшего образования"
+)
+TITLE_PAGE_UNIVERSITY_SHORT = "«Балтийский федеральный университет имени Иммануила Канта»"
+TITLE_PAGE_FACULTY = "Институт физико-математических наук и информационных технологий"
+TITLE_PAGE_DEPARTMENT = "Кафедра прикладной математики и информатики"
+TITLE_PAGE_AUTHOR = "Крикун Александр Владиславович"
+TITLE_PAGE_GROUP = "4ПМиИ"
+
 
 def default_word_templates_dir() -> Path:
     return Path(__file__).resolve().parent / "templates"
 
 
-def _unique_scenario_code(project: Any) -> str:
-    """Один тип ПОУО на отчёт: все p.code должны совпадать."""
+def _one_template_code_from_project(project: Any) -> str:
+    """
+    Код сценария для выбора **одного** файла шаблона.
+
+    Нужен только для ``resolve_word_template_path`` / ``render_report_for_project``.
+    Смешанный проект → ошибка с подсказкой использовать ``render_full_report``.
+    """
     pouos = getattr(project, "pouos", None) or []
     if not pouos:
         raise ValueError("В проекте нет ПОУО — нечего включать в отчёт.")
     codes = {p.code for p in pouos}
-    if len(codes) > 1:
+    if len(codes) != 1:
         raise ValueError(
-            "В одном Word-отчёте допустимы только ПОУО одного типа. "
-            f"Сейчас: {', '.join(sorted(codes))}. "
-            "Оставьте в проекте один сценарий или формируйте отчёты по отдельности."
+            "Экспорт в один Word-файл без сборки возможен только при одном типе ПОУО. "
+            f"Сейчас в проекте: {', '.join(sorted(codes))}. "
+            "Для нескольких сценариев используйте полный отчёт (render_full_report)."
         )
     return next(iter(codes))
 
@@ -54,11 +78,13 @@ def resolve_word_template_path(
     templates_dir: str | Path | None = None,
 ) -> Tuple[Path, str]:
     """
-    Возвращает (полный путь к файлу, имя файла).
-    Нет файла — FileNotFoundError с указанием сценария и пути.
+    Возвращает (полный путь к файлу, имя файла) для **одного** типа ПОУО в ``project``.
+
+    При нескольких разных ``code`` — ``ValueError`` (нужен :func:`render_full_report`).
+    Нет файла — ``FileNotFoundError`` с указанием сценария и пути.
     """
     base = Path(templates_dir) if templates_dir else default_word_templates_dir()
-    code = _unique_scenario_code(project)
+    code = _one_template_code_from_project(project)
     filename = word_template_filename_for_scenario(code)
     path = base / filename
     if not path.is_file():
@@ -69,22 +95,27 @@ def resolve_word_template_path(
 
 
 def word_template_debug_line(project: Any, templates_dir: str | Path | None = None) -> str:
-    """Строка для окна отладки: какой шаблон соответствует проекту и существует ли файл."""
+    """Строка для отладки: шаблоны по каждому коду ПОУО (порядок как в project.pouos)."""
     base = Path(templates_dir) if templates_dir else default_word_templates_dir()
-    try:
-        code = _unique_scenario_code(project)
-        filename = word_template_filename_for_scenario(code)
-    except ValueError as e:
-        return f"Шаблон Word: не определён ({e})"
-    path = base / filename
-    if path.is_file():
-        return f"Используемый шаблон Word: {filename}  (сценарий {code})"
-    return (
-        f"Ожидаемый шаблон Word: {filename}  (сценарий {code}) — файл не найден:\n  {path}"
-    )
+    _, order = group_pouos_by_code(project)
+    if not order:
+        return "Шаблон Word: в проекте нет ПОУО."
+    lines: List[str] = ["Шаблоны Word (порядок первого появления кода в проекте):"]
+    for code in order:
+        try:
+            filename = word_template_filename_for_scenario(code)
+        except ValueError as e:
+            lines.append(f"  • {code}: {e}")
+            continue
+        path = base / filename
+        if path.is_file():
+            lines.append(f"  • {code} → {filename} (файл найден)")
+        else:
+            lines.append(f"  • {code} → {filename} — нет файла:\n    {path}")
+    return "\n".join(lines)
 
 from docxtpl import DocxTemplate, InlineImage
-from docx.shared import Mm
+from docx.shared import Mm, Pt
 
 from app.core.fuels import get_fuel
 
@@ -964,9 +995,344 @@ def render_report_for_project(
     templates_dir: str | Path | None = None,
 ) -> str:
     """
-    Подбирает шаблон по единственному типу ПОУО в проекте, рендерит отчёт.
+    Подбирает шаблон по **единственному** типу ПОУО в проекте, рендерит один .docx.
+
+    Если в проекте несколько разных ``code``, будет ошибка — используйте
+    :func:`render_full_report`.
+
     Возвращает имя использованного файла шаблона.
     """
     template_path, filename = resolve_word_template_path(project, templates_dir)
     render_report(str(template_path), output_path, project)
     return filename
+
+
+def group_pouos_by_code(project: Any) -> Tuple[Dict[str, List[Any]], List[str]]:
+    """
+    Группировка ПОУО по полю code.
+
+    Возвращает (groups, order), где order — порядок первого появления каждого code
+    в project.pouos (как добавлял пользователь).
+    """
+    pouos = getattr(project, "pouos", None) or []
+    groups: Dict[str, List[Any]] = {}
+    order: List[str] = []
+
+    for p in pouos:
+        code = getattr(p, "code", "") or ""
+        if code not in groups:
+            groups[code] = []
+            order.append(code)
+        groups[code].append(p)
+
+    return groups, order
+
+
+def render_reports_per_scenario(
+    project: Any,
+    output_dir: str | Path,
+    templates_dir: str | Path | None = None,
+) -> Dict[str, str]:
+    """
+    Для каждого встречающегося code — отдельный файл ``report_{code}.docx`` в output_dir.
+    Порядок генерации совпадает с порядком первого появления code в project.pouos.
+
+    Проект для каждого файла — deepcopy исходного с подсписком pouos только этого code.
+
+    Возвращает словарь code → абсолютный путь (в Python 3.7+ порядок ключей = порядок обхода).
+    """
+    groups, order = group_pouos_by_code(project)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base_templates = Path(templates_dir) if templates_dir else default_word_templates_dir()
+
+    saved: Dict[str, str] = {}
+    for code in order:
+        sub = copy.deepcopy(project)
+        sub.pouos = [p for p in sub.pouos if getattr(p, "code", "") == code]
+        template_path, _ = resolve_word_template_path(sub, base_templates)
+        out_path = out_dir / f"report_{code}.docx"
+        render_report(str(template_path), str(out_path), sub)
+        saved[code] = str(out_path.resolve())
+    return saved
+
+
+def _remove_default_empty_paragraph(doc: Any) -> None:
+    """Убирает начальный пустой абзац у только что созданного Document()."""
+    paras = doc.paragraphs
+    if not paras:
+        return
+    first = paras[0]
+    if first.text.strip() == "" and len(first.runs) == 0:
+        el = first._element
+        parent = el.getparent()
+        if parent is not None:
+            parent.remove(el)
+
+
+def add_title_page(doc: Any, project: Any) -> None:
+    """Титульный лист в стиле ГОСТ (организация, тема, объект, исполнитель)."""
+    uni = doc.add_paragraph()
+    uni.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = uni.add_run(TITLE_PAGE_UNIVERSITY)
+    r.bold = True
+    r.font.size = Pt(12)
+
+    p2 = doc.add_paragraph()
+    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r2 = p2.add_run(TITLE_PAGE_UNIVERSITY_SHORT)
+    r2.bold = True
+    r2.font.size = Pt(14)
+
+    fac = doc.add_paragraph()
+    fac.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    fac.add_run(TITLE_PAGE_FACULTY)
+
+    dep = doc.add_paragraph()
+    dep.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    dep.add_run(TITLE_PAGE_DEPARTMENT)
+
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    tr = title.add_run("Паспорт безопасности объекта ТЭК")
+    tr.bold = True
+    tr.font.size = Pt(16)
+
+    sub = doc.add_paragraph()
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sub.add_run("Отчёт по расчётам последствий аварий")
+
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    obj_name = getattr(project, "object_name", "") or "—"
+    addr = getattr(project, "address", "") or "—"
+    doc.add_paragraph(f"Объект: {obj_name}")
+    doc.add_paragraph(f"Адрес: {addr}")
+
+    doc.add_paragraph()
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    sign = doc.add_paragraph()
+    sign.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    year = datetime.now().year
+    sign.add_run(
+        f"Выполнил: {TITLE_PAGE_AUTHOR}\n"
+        f"Группа: {TITLE_PAGE_GROUP}\n"
+        f"Год: {year}"
+    )
+
+    doc.add_page_break()
+
+
+def add_table_of_contents(doc: Any) -> None:
+    """Поле оглавления Word (уровни 1–3); после открытия в Word — обновить поля."""
+    head = doc.add_paragraph()
+    head.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    hr = head.add_run("Содержание")
+    hr.bold = True
+    hr.font.size = Pt(14)
+
+    doc.add_paragraph()
+
+    p_toc = doc.add_paragraph()
+    fld = OxmlElement("w:fldSimple")
+    fld.set(qn("w:instr"), r'TOC \o "1-3" \h \z \u ')
+    p_toc._p.append(fld)
+
+    hint = doc.add_paragraph()
+    hint_run = hint.add_run(
+        "(В Microsoft Word: выделите оглавление → ПКМ → «Обновить поле».)"
+    )
+    hint_run.italic = True
+    hint_run.font.size = Pt(9)
+
+    doc.add_page_break()
+
+
+def export_to_pdf(docx_path: str | Path, pdf_path: str | Path) -> None:
+    """Экспорт .docx в .pdf через Word (Windows). Требуется пакет docx2pdf."""
+    try:
+        from docx2pdf import convert
+    except ImportError as e:
+        raise ImportError(
+            "Для экспорта в PDF установите зависимость: pip install docx2pdf"
+        ) from e
+    dx = str(Path(docx_path).resolve())
+    pdf = str(Path(pdf_path).resolve())
+    Path(pdf).parent.mkdir(parents=True, exist_ok=True)
+    convert(dx, pdf)
+
+
+def _apply_landscape_a4_all_sections(doc: Any) -> None:
+    """Все секции документа — альбомная A4 (297×210 мм)."""
+    for section in doc.sections:
+        section.orientation = WD_ORIENT.LANDSCAPE
+        section.page_width = Mm(297)
+        section.page_height = Mm(210)
+
+
+def _normal_style(doc: Any):
+    try:
+        return doc.styles["Normal"]
+    except (KeyError, ValueError):
+        return None
+
+
+def _strip_paragraph_background(doc: Any, paragraph: Any) -> None:
+    """Highlight, w:rPr/w:shd, w:pPr/w:shd, сброс стиля на Normal (уменьшает заливку из стилей)."""
+    for run in paragraph.runs:
+        try:
+            run.font.highlight_color = None
+        except (AttributeError, TypeError):
+            pass
+        r_el = run._element
+        r_pr = r_el.find(qn("w:rPr"))
+        if r_pr is not None:
+            shd = r_pr.find(qn("w:shd"))
+            if shd is not None:
+                r_pr.remove(shd)
+
+    p_el = paragraph._element
+    p_pr = p_el.find(qn("w:pPr"))
+    if p_pr is not None:
+        shd = p_pr.find(qn("w:shd"))
+        if shd is not None:
+            p_pr.remove(shd)
+
+    norm = _normal_style(doc)
+    if norm is not None:
+        try:
+            paragraph.style = norm
+        except (ValueError, KeyError):
+            pass
+
+
+def _remove_cell_tc_shading(cell: Any) -> None:
+    tc = cell._element
+    tc_pr = tc.find(qn("w:tcPr"))
+    if tc_pr is not None:
+        shd = tc_pr.find(qn("w:shd"))
+        if shd is not None:
+            tc_pr.remove(shd)
+
+
+def _remove_background_from_table(doc: Any, table: Any) -> None:
+    tbl_pr = table._tbl.find(qn("w:tblPr"))
+    if tbl_pr is not None:
+        shd = tbl_pr.find(qn("w:shd"))
+        if shd is not None:
+            tbl_pr.remove(shd)
+
+    for row in table.rows:
+        tr_pr = row._tr.find(qn("w:trPr"))
+        if tr_pr is not None:
+            shd = tr_pr.find(qn("w:shd"))
+            if shd is not None:
+                tr_pr.remove(shd)
+        for cell in row.cells:
+            _remove_cell_tc_shading(cell)
+            for paragraph in cell.paragraphs:
+                _strip_paragraph_background(doc, paragraph)
+            for nested in cell.tables:
+                _remove_background_from_table(doc, nested)
+
+
+def remove_background(doc: Any) -> None:
+    """
+    Убирает заливку: highlight, w:shd на run/абзаце/ячейке, сбрасывает стиль абзацев на Normal.
+
+    Обходит также вложенные таблицы. Полностью убрать заливку из определений стилей в .docx
+    без правки styles.xml нельзя; сброс на Normal снимает применение многих стилей с фоном.
+    """
+    for paragraph in doc.paragraphs:
+        _strip_paragraph_background(doc, paragraph)
+    for table in doc.tables:
+        _remove_background_from_table(doc, table)
+
+
+def merge_word_files(
+    files: Sequence[str | Path],
+    output_path: str | Path,
+    project: Any,
+    scenario_codes: Sequence[str],
+) -> None:
+    """
+    Собирает итоговый документ: пустой ``Document()``, титульник, оглавление,
+    затем сценарии с заголовками «Сценарий N — CODE» и телом каждого фрагмента.
+
+    Объединение фрагментов через ``docxcompose.Composer`` (relationships, media, стили).
+    Прямой перенос ``element.body`` не используется.
+
+    Между сценариями — разрыв страницы. Порядок ``files`` и ``scenario_codes`` должен совпадать.
+    """
+    try:
+        from docxcompose.composer import Composer
+    except ImportError as e:
+        raise ImportError(
+            "Для сборки итогового Word установите: pip install docxcompose"
+        ) from e
+
+    paths = [str(p) for p in files]
+    codes = list(scenario_codes)
+    if not paths:
+        raise ValueError("merge_word_files: пустой список файлов")
+    if len(paths) != len(codes):
+        raise ValueError(
+            "merge_word_files: число файлов и кодов сценариев должно совпадать"
+        )
+
+    base = _DocxDocument()
+    _remove_default_empty_paragraph(base)
+    _apply_landscape_a4_all_sections(base)
+
+    add_title_page(base, project)
+    add_table_of_contents(base)
+
+    composer = Composer(base)
+
+    for i, (path, code) in enumerate(zip(paths, codes)):
+        if i > 0:
+            base.add_page_break()
+        base.add_heading(f"Сценарий {i + 1} — {code}", level=1)
+        composer.append(_DocxDocument(path))
+
+    _apply_landscape_a4_all_sections(base)
+    remove_background(base)
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    composer.save(str(out))
+
+
+def render_full_report(
+    project: Any,
+    output_path: str | Path,
+    templates_dir: str | Path | None = None,
+    *,
+    export_pdf: bool = False,
+) -> None:
+    """
+    Временные ``report_{code}.docx`` по порядку добавления ПОУО → один итоговый файл
+    (титульник, оглавление, пронумерованные сценарии).
+
+    Временная папка создаётся через ``tempfile`` и удаляется после merge.
+
+    При ``export_pdf=True`` рядом сохраняется файл с расширением ``.pdf`` (нужен docx2pdf и Word).
+    """
+    out = Path(output_path)
+    with tempfile.TemporaryDirectory(prefix="tek_passport_word_") as tmp:
+        per_code = render_reports_per_scenario(project, tmp, templates_dir)
+        order = list(per_code.keys())
+        files_in_order = list(per_code.values())
+        if not files_in_order:
+            raise ValueError("В проекте нет ПОУО — нечего включать в отчёт.")
+        merge_word_files(files_in_order, out, project, order)
+
+    if export_pdf:
+        pdf_path = out.with_suffix(".pdf")
+        export_to_pdf(out, pdf_path)
