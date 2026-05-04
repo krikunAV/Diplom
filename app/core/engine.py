@@ -69,24 +69,54 @@ def _pouo_result_to_legacy(p: POUO, pouo_result) -> None:
         res = ctx.results
 
         _rel_inputs = ctx.inputs.get("release", {}) if ctx.inputs else {}
+        _subst_inputs = ctx.inputs.get("substance", {}) if ctx.inputs else {}
+        _cloud_inputs = ctx.inputs.get("cloud", {}) if ctx.inputs else {}
+        _acc_pipe = next((pipe for pipe in p.pipes if getattr(pipe, "is_accident", False)), None)
+        _acc_pipe = _acc_pipe or (p.pipes[0] if p.pipes else None)
         p.results["release"] = {
-            "accident_pipe": (p.pipes[0].name if p.pipes else ""),
+            "accident_pipe": (_acc_pipe.name if _acc_pipe else ""),
             "P_up_kpa": float(p.inputs.get("P0_kpa", 0.0)),
-            "d_hole_mm": float(p.pipes[0].diameter_mm) if p.pipes else 0.0,
+            "P_liquid_kpa": float(p.inputs.get("P_liquid_kpa", p.inputs.get("P0_kpa", 0.0)) or 0.0),
+            "P_vapor_kpa": float(p.inputs.get("P_vapor_kpa", 0.0) or 0.0),
+            "d_hole_mm": float(_acc_pipe.diameter_mm) if _acc_pipe else 0.0,
+            "d_m": _rel_inputs.get("orifice_d_m"),
             "t_shutoff_s": float(p.inputs.get("t_shutoff_s", 0.0)),
             # газовые константы (нужны шаблону для отображения формул)
             "T_K":       _rel_inputs.get("T_K"),
             "R0_J_kgK":  _rel_inputs.get("R0_J_kgK"),
+            "rho_n_kg_m3": _subst_inputs.get("rho_gas_kg_m3"),
+            "Z":         _cloud_inputs.get("Z"),
             # intermediate
             "F_m2":                    inter.get("F_m2"),
             "v_g_m3_kg":               inter.get("v_g_m3_kg"),
+            "m_dot_release_kg_s":       inter.get("m_dot_release_kg_s"),
             "m_dot_kg_s":              inter.get("m_dot_kg_s"),
+            "m_dot_peak_kg_s":          inter.get("m_dot_peak_kg_s"),
             "M1T_kg":                  inter.get("M1T_kg"),
+            "V1T_m3":                   inter.get("V1T_m3"),
             "sum_r2L_m3":              inter.get("sum_r2L_m3"),
             "V2T_m3":                  inter.get("V2T_m3"),
             "M2T_kg":                  inter.get("M2T_kg"),
             "Mg_kg":                   inter.get("Mg_kg"),
             "M_total_kg":              inter.get("Mg_kg"),
+            "vapor_mass_kg":            inter.get("vapor_mass_kg"),
+            "liquid_mass_kg":           inter.get("liquid_mass_kg"),
+            "cloud_mass_kg":            inter.get("cloud_mass_kg", inter.get("m_cloud_kg")),
+            "tvs_cloud_mass_kg":        inter.get("tvs_cloud_mass_kg", inter.get("m_cloud_kg")),
+            "total_mass_kg":            inter.get("total_mass_kg", inter.get("Mg_kg")),
+            "vapor_volume_m3":          inter.get("vapor_volume_m3"),
+            "liquid_gas_volume_m3":     inter.get("liquid_gas_volume_m3"),
+            "GV_kg_s":                  inter.get("GV_kg_s"),
+            "GL_kg_s":                  inter.get("GL_kg_s"),
+            "Mzh_kg":                   inter.get("Mzh_kg"),
+            "VGVS_m3":                  inter.get("VGVS_m3"),
+            "mi_kg":                    inter.get("mi_kg"),
+            "Mg_total_kg":              inter.get("Mg_total_kg"),
+            "mg_tvs_kg":                inter.get("mg_tvs_kg"),
+            "E_template_J":             inter.get("E_template_J"),
+            "m_flash_kg":               inter.get("m_flash_kg"),
+            "m_pool_evap_kg":           inter.get("m_pool_evap_kg"),
+            "m_evap_kg":                inter.get("m_evap_kg"),
             "m_cloud_kg":              inter.get("m_cloud_kg"),
             "Eud_J_kg":                inter.get("Eud_J_kg"),
             "E_concentration_correction": inter.get("E_concentration_correction"),

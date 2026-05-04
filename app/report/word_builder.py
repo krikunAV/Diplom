@@ -408,6 +408,8 @@ def _build_release_block(results: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "accident_pipe": rel.get("accident_pipe", ""),
         "P_up_kpa": _round_if_number(rel.get("P_up_kpa")),
+        "P_liquid_kpa": _round_if_number(rel.get("P_liquid_kpa")),
+        "P_vapor_kpa": _round_if_number(rel.get("P_vapor_kpa")),
         "P2_kpa": _round_if_number(rel.get("P2_kpa", rel.get("P_up_kpa"))),
         "d_hole_mm": _round_if_number(rel.get("d_hole_mm")),
         "d_m": _round_if_number(rel.get("d_m"), 4),
@@ -415,13 +417,34 @@ def _build_release_block(results: Dict[str, Any]) -> Dict[str, Any]:
 
         "F_m2": _round_if_number(rel.get("F_m2"), 6),
         "v_g_m3_kg": _round_if_number(rel.get("v_g_m3_kg"), 6),
+        "m_dot_release_kg_s": _round_if_number(rel.get("m_dot_release_kg_s"), 4),
         "m_dot_kg_s": _round_if_number(rel.get("m_dot_kg_s", rel.get("G_kg_s")), 4),
+        "m_dot_peak_kg_s": _round_if_number(rel.get("m_dot_peak_kg_s"), 4),
+        "V1T_m3": _round_if_number(rel.get("V1T_m3"), 4),
         "M1T_kg": _round_if_number(rel.get("M1T_kg")),
         "sum_r2L_m3": _round_if_number(rel.get("sum_r2L_m3"), 6),
         "V2T_m3": _round_if_number(rel.get("V2T_m3")),
         "M2T_kg": _round_if_number(rel.get("M2T_kg")),
         "Mg_kg": _round_if_number(rel.get("Mg_kg")),
         "M_total_kg": _round_if_number(rel.get("M_total_kg", rel.get("Mg_kg"))),
+        "vapor_mass_kg": _round_if_number(rel.get("vapor_mass_kg")),
+        "liquid_mass_kg": _round_if_number(rel.get("liquid_mass_kg")),
+        "cloud_mass_kg": _round_if_number(rel.get("cloud_mass_kg", rel.get("m_cloud_kg"))),
+        "tvs_cloud_mass_kg": _round_if_number(rel.get("tvs_cloud_mass_kg", rel.get("m_cloud_kg"))),
+        "total_mass_kg": _round_if_number(rel.get("total_mass_kg", rel.get("Mg_kg"))),
+        "vapor_volume_m3": _round_if_number(rel.get("vapor_volume_m3"), 4),
+        "liquid_gas_volume_m3": _round_if_number(rel.get("liquid_gas_volume_m3"), 2),
+        "GV_kg_s": _round_if_number(rel.get("GV_kg_s"), 4),
+        "GL_kg_s": _round_if_number(rel.get("GL_kg_s"), 4),
+        "Mzh_kg": _round_if_number(rel.get("Mzh_kg")),
+        "VGVS_m3": _round_if_number(rel.get("VGVS_m3"), 2),
+        "mi_kg": _round_if_number(rel.get("mi_kg")),
+        "Mg_total_kg": _round_if_number(rel.get("Mg_total_kg")),
+        "mg_tvs_kg": _round_if_number(rel.get("mg_tvs_kg")),
+        "E_template_J": _round_if_number(rel.get("E_template_J")),
+        "m_flash_kg": _round_if_number(rel.get("m_flash_kg")),
+        "m_pool_evap_kg": _round_if_number(rel.get("m_pool_evap_kg")),
+        "m_evap_kg": _round_if_number(rel.get("m_evap_kg")),
         "m_cloud_kg": _round_if_number(rel.get("m_cloud_kg")),
 
         "Eud_J_kg": _round_if_number(rel.get("Eud_J_kg")),
@@ -439,6 +462,72 @@ def _build_release_block(results: Dict[str, Any]) -> Dict[str, Any]:
         "r0_wind3_m": _round_if_number(rel.get("r0_wind3_m")),
 
         "skip_reason": rel.get("skip_reason"),
+    }
+
+
+def _build_lpg_pipe_block(results: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convenience block for POUO6 templates.
+
+    It is assembled from already computed release/TVS/jet/fireball results and
+    does not introduce report-side calculations.
+    """
+    rel = _build_release_block(results)
+    tvs = _build_tvs_block(results)
+    jf = _build_jetfire_block(results)
+    fb = _build_fireball_block(results)
+
+    def _safe(v: Any, ndigits: int = 2) -> str:
+        return _pretty_value(v, ndigits)
+
+    jf_params = jf.get("params", {}) or {}
+    fb_params = fb.get("params", {}) or {}
+    summary = {
+        "m_total_kg": _safe(rel.get("total_mass_kg", rel.get("M_total_kg")), 1),
+        "V1T_m3": _safe(rel.get("V1T_m3"), 3),
+        "M1T_kg": _safe(rel.get("M1T_kg"), 3),
+        "vapor_mass_kg": _safe(rel.get("vapor_mass_kg"), 3),
+        "liquid_mass_kg": _safe(rel.get("liquid_mass_kg"), 1),
+        "VGVS_m3": _safe(rel.get("VGVS_m3"), 1),
+        "mi_kg": _safe(rel.get("mi_kg"), 2),
+        "Mg_total_kg": _safe(rel.get("Mg_total_kg"), 2),
+        "mg_tvs_kg": _safe(rel.get("mg_tvs_kg"), 2),
+        "m_flash_kg": _safe(rel.get("m_flash_kg"), 1),
+        "m_evap_kg": _safe(rel.get("m_evap_kg"), 1),
+        "m_cloud_kg": _safe(rel.get("cloud_mass_kg", rel.get("m_cloud_kg")), 1),
+        "tvs_cloud_mass_kg": _safe(rel.get("tvs_cloud_mass_kg", rel.get("m_cloud_kg")), 1),
+        "m_dot_kg_s": _safe(rel.get("m_dot_kg_s"), 3),
+        "GV_kg_s": _safe(rel.get("GV_kg_s"), 3),
+        "GL_kg_s": _safe(rel.get("GL_kg_s"), 3),
+        "E_MJ": _safe((rel.get("E_J") or 0.0) / 1_000_000.0 if rel.get("E_J") is not None else None, 1),
+        "max_delta_p_kpa": _safe(tvs.get("max_delta_p_kpa"), 2),
+        "jet_lf_m": _safe(jf_params.get("LF_m"), 1),
+        "jet_df_m": _safe(jf_params.get("DF_m"), 1),
+        "fireball_ds_m": _safe(fb_params.get("Ds_m"), 1),
+        "fireball_ts_s": _safe(fb_params.get("ts_s"), 1),
+    }
+
+    return {
+        "release": rel,
+        "tvs": tvs,
+        "jet_fire": jf,
+        "fireball": fb,
+        "summary": summary,
+        "vapor_mass": rel.get("vapor_mass_kg"),
+        "liquid_mass": rel.get("liquid_mass_kg"),
+        "gas_volume": rel.get("VGVS_m3", rel.get("liquid_gas_volume_m3")),
+        "cloud_mass": rel.get("cloud_mass_kg", rel.get("m_cloud_kg")),
+        "tvs_mass": rel.get("mg_tvs_kg", rel.get("tvs_cloud_mass_kg")),
+        "total_mass": rel.get("total_mass_kg", rel.get("M_total_kg")),
+        "energy": rel.get("E_template_J", rel.get("E_J")),
+        "m_total_kg": rel.get("total_mass_kg", rel.get("M_total_kg")),
+        "m_flash_kg": rel.get("m_flash_kg"),
+        "m_pool_evap_kg": rel.get("m_pool_evap_kg"),
+        "m_evap_kg": rel.get("m_evap_kg"),
+        "m_cloud_kg": rel.get("m_cloud_kg"),
+        "m_dot_kg_s": rel.get("m_dot_kg_s"),
+        "m_dot_peak_kg_s": rel.get("m_dot_peak_kg_s"),
+        "E_J": rel.get("E_J"),
     }
 
 
@@ -963,6 +1052,7 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
         tvs_block = _build_tvs_block(raw_results)
         pool_fire_block = _build_pool_fire_block(raw_results)
         tank_park_block = _build_tank_park_block(raw_results)
+        lpg_pipe_block = _build_lpg_pipe_block(raw_results)
 
         code = getattr(p, "code", "")
         charts_dir = os.path.join("out", "charts")
@@ -996,6 +1086,7 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             "tvs": tvs_block,
             "pool_fire": pool_fire_block,
             "tank_park": tank_park_block,
+            "lpg_pipe": lpg_pipe_block,
 
             # Пути к графикам
             "tvs_dp_chart_path": tvs_dp_path,
@@ -1010,6 +1101,7 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             "has_tvs":       bool(tvs_block        and not tvs_block.get("skip_reason")),
             "has_pool_fire": bool(pool_fire_block  and not pool_fire_block.get("skip_reason")
                                   and pool_fire_block.get("zones")),
+            "has_lpg_pipe":  bool(code == "POUO6" and not raw_results.get("error")),
             "has_tank_park": bool(raw_results.get("tank_park")),
             "is_tank_park":  bool(raw_results.get("tank_park")),
             "has_error":     bool(raw_results.get("error")),

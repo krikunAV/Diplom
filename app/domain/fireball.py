@@ -10,9 +10,10 @@ from app.domain.base import BaseScenario
 
 def _run_fireball(ctx: CalculationContext) -> None:
     m_kg = float(ctx.inputs.get("m_kg", 0.0))
-    result = calc_fireball_by_M(m_kg=m_kg)
+    Ef = float(ctx.inputs.get("Ef_kw_m2", 80.0))
+    result = calc_fireball_by_M(m_kg=m_kg, Ef_kw_m2=Ef)
     ctx.results.update(result)
-    ctx.log(f"[fireball] m={m_kg:.2f} kg")
+    ctx.log(f"[fireball] m={m_kg:.2f} kg, Ef={Ef:.3g} kW/m2")
 
 
 class FireballScenario(BaseScenario):
@@ -21,6 +22,7 @@ class FireballScenario(BaseScenario):
 
     Формат raw_inputs:
       m_kg: суммарная масса горючего в выбросе
+      Ef_kw_m2: optional surface emissive power
     """
 
     scenario_type = "fireball"

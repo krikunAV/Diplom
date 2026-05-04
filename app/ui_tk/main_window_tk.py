@@ -40,6 +40,10 @@ class MainWindowTk(tk.Tk):
         self.minsize(780, 480)
 
         self.project_pouos = []
+        self.current_phase = tk.StringVar(value="liquid")
+        self._lpg_pipe_data = {"liquid": [], "vapor": []}
+        self._lpg_loaded_phase = "liquid"
+        self.selected_break_pipe = {"phase": "liquid", "index": None}
         self._build_top()
         self._build_room_block()   # создаёт self.frm_room (не пакует)
         self._build_tank_block()   # создаёт self.frm_tank (не пакует)
@@ -156,6 +160,37 @@ class MainWindowTk(tk.Tk):
     def _build_table(self):
         """Таблица трубопроводов. Пакуется/снимается через _refresh_layout()."""
         self.frm_pipes = ttk.LabelFrame(self, text="2) Трубопроводы (отметь аварийный участок ☑)")
+
+        self.frm_lpg_phase = ttk.LabelFrame(self.frm_pipes, text="POUO6: фаза СУГ и раздельные давления")
+        self.frm_lpg_phase.pack(fill="x", padx=8, pady=(8, 0))
+
+        ttk.Label(self.frm_lpg_phase, text="Текущая фаза:").grid(row=0, column=0, sticky="w", padx=8, pady=6)
+        self.cb_lpg_phase = ttk.Combobox(
+            self.frm_lpg_phase,
+            textvariable=self.current_phase,
+            state="readonly",
+            width=18,
+            values=("liquid", "vapor"),
+        )
+        self.cb_lpg_phase.grid(row=0, column=1, sticky="w", padx=8, pady=6)
+        self.cb_lpg_phase.bind("<<ComboboxSelected>>", lambda e: self._on_lpg_phase_change())
+
+        ttk.Label(self.frm_lpg_phase, text="P_liquid, кПа:").grid(row=0, column=2, sticky="w", padx=(18, 6), pady=6)
+        self.in_p_liquid = ttk.Entry(self.frm_lpg_phase, width=12)
+        self.in_p_liquid.insert(0, "500")
+        self.in_p_liquid.grid(row=0, column=3, sticky="w", padx=6, pady=6)
+
+        ttk.Label(self.frm_lpg_phase, text="P_vapor, кПа:").grid(row=0, column=4, sticky="w", padx=(18, 6), pady=6)
+        self.in_p_vapor = ttk.Entry(self.frm_lpg_phase, width=12)
+        self.in_p_vapor.insert(0, "30")
+        self.in_p_vapor.grid(row=0, column=5, sticky="w", padx=6, pady=6)
+
+        ttk.Label(
+            self.frm_lpg_phase,
+            text="Таблица ниже показывает pipes[current_phase].",
+            foreground="#666",
+        ).grid(row=1, column=0, columnspan=6, sticky="w", padx=8, pady=(0, 6))
+        self.frm_lpg_phase.pack_forget()
 
         cols = ("acc", "length_m", "diam_mm")
         self.tree = ttk.Treeview(self.frm_pipes, columns=cols, show="headings", height=8)
@@ -315,8 +350,12 @@ class MainWindowTk(tk.Tk):
 
         # Показываем/скрываем P0 и t_shutoff
         if sc.needs_pressure:
-            self.lbl_p0.grid()
-            self.in_p0.grid()
+            if sid == "POUO6":
+                self.lbl_p0.grid_remove()
+                self.in_p0.grid_remove()
+            else:
+                self.lbl_p0.grid()
+                self.in_p0.grid()
         else:
             self.lbl_p0.grid_remove()
             self.in_p0.grid_remove()
@@ -350,6 +389,7 @@ class MainWindowTk(tk.Tk):
 
         if sc.needs_pipes:
             self.frm_pipes.pack(fill="both", expand=True, padx=10, pady=10, before=self.frm_sel)
+            self._refresh_lpg_phase_ui()
 
     def _selected_scenario_id(self) -> str:
         return self.scenario_var.get().split("—")[0].strip()
@@ -357,6 +397,92 @@ class MainWindowTk(tk.Tk):
     def _selected_fuel_id(self) -> str:
         title = self.fuel_var.get().strip()
         return self._fuel_title_to_id.get(title, "natgas")
+
+    def _is_pouo6(self) -> bool:
+        return self._selected_scenario_id() == "POUO6"
+
+    def _tree_rows_as_pipe_dicts(self) -> list[dict]:
+        rows = []
+        for idx, iid in enumerate(self.tree.get_children()):
+            v = self.tree.item(iid, "values")
+            rows.append({
+                "name": f"Участок {idx + 1}",
+                "length_m": float(str(v[1]).replace(",", ".")),
+                "diameter_mm": float(str(v[2]).replace(",", ".")),
+                "is_accident": str(v[0]).strip() == "☑",
+            })
+        return rows
+
+    def _save_lpg_current_phase_rows(self) -> None:
+        if not hasattr(self, "tree"):
+            return
+        phase = getattr(self, "_lpg_loaded_phase", self.current_phase.get())
+        if phase in self._lpg_pipe_data:
+            self._lpg_pipe_data[phase] = self._tree_rows_as_pipe_dicts()
+
+    def _load_lpg_phase_rows(self, phase: str) -> None:
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for row in self._lpg_pipe_data.get(phase, []):
+            self.tree.insert(
+                "",
+                "end",
+                values=("☑" if row.get("is_accident") else "☐", row["length_m"], row["diameter_mm"]),
+            )
+        self._lpg_loaded_phase = phase
+
+    def _on_lpg_phase_change(self) -> None:
+        self._save_lpg_current_phase_rows()
+        self._load_lpg_phase_rows(self.current_phase.get())
+
+    def _set_lpg_break_pipe(self, phase: str, index: int) -> None:
+        self._save_lpg_current_phase_rows()
+        for ph in ("liquid", "vapor"):
+            for i, row in enumerate(self._lpg_pipe_data.get(ph, [])):
+                row["is_accident"] = (ph == phase and i == index)
+        self.selected_break_pipe = {"phase": phase, "index": index}
+        self.current_phase.set(phase)
+        self._load_lpg_phase_rows(phase)
+
+    def _lpg_break_count(self) -> int:
+        self._save_lpg_current_phase_rows()
+        return sum(
+            1
+            for ph in ("liquid", "vapor")
+            for row in self._lpg_pipe_data.get(ph, [])
+            if row.get("is_accident")
+        )
+
+    def _ensure_lpg_single_break(self) -> None:
+        self._save_lpg_current_phase_rows()
+        selected = None
+        for ph in ("liquid", "vapor"):
+            for i, row in enumerate(self._lpg_pipe_data.get(ph, [])):
+                if row.get("is_accident") and selected is None:
+                    selected = (ph, i)
+                row["is_accident"] = False
+        if selected is None:
+            for ph in ("liquid", "vapor"):
+                if self._lpg_pipe_data.get(ph):
+                    selected = (ph, 0)
+                    break
+        if selected is not None:
+            ph, i = selected
+            self._lpg_pipe_data[ph][i]["is_accident"] = True
+            self.selected_break_pipe = {"phase": ph, "index": i}
+        else:
+            self.selected_break_pipe = {"phase": self.current_phase.get(), "index": None}
+        self._load_lpg_phase_rows(self.current_phase.get())
+
+    def _refresh_lpg_phase_ui(self) -> None:
+        if self._is_pouo6():
+            self.frm_pipes.configure(text="2) Трубопроводы POUO6 по фазам СУГ")
+            self.frm_lpg_phase.pack(fill="x", padx=8, pady=(8, 0), before=self.tree)
+            if self._lpg_loaded_phase != self.current_phase.get():
+                self._load_lpg_phase_rows(self.current_phase.get())
+        else:
+            self.frm_pipes.configure(text="2) Трубопроводы (отметь аварийный участок ☑)")
+            self.frm_lpg_phase.pack_forget()
 
     def _on_tree_click(self, event):
         region = self.tree.identify("region", event.x, event.y)
@@ -367,6 +493,10 @@ class MainWindowTk(tk.Tk):
         if not row_id:
             return
         if col == "#1":
+            if self._is_pouo6():
+                row_index = list(self.tree.get_children()).index(row_id)
+                self._set_lpg_break_pipe(self.current_phase.get(), row_index)
+                return
             for iid in self.tree.get_children():
                 vals = list(self.tree.item(iid, "values"))
                 vals[0] = "☐"
@@ -382,6 +512,8 @@ class MainWindowTk(tk.Tk):
         if L is None:
             return
         self.tree.insert("", "end", values=("☐", L, D))
+        if self._is_pouo6():
+            self._ensure_lpg_single_break()
         self.in_len.delete(0, tk.END)
         self.in_diam.delete(0, tk.END)
 
@@ -402,6 +534,8 @@ class MainWindowTk(tk.Tk):
         if not sel:
             return
         self.tree.delete(sel[0])
+        if self._is_pouo6():
+            self._ensure_lpg_single_break()
 
     def fill_demo(self):
         sid = self._selected_scenario_id()
@@ -418,6 +552,29 @@ class MainWindowTk(tk.Tk):
             self.in_spill_duration.insert(0, "3600")
             self.in_people_density.delete(0, tk.END)
             self.in_people_density.insert(0, "5")
+            return
+
+        if sid == "POUO6":
+            self.in_p_liquid.delete(0, tk.END)
+            self.in_p_liquid.insert(0, "500")
+            self.in_p_vapor.delete(0, tk.END)
+            self.in_p_vapor.insert(0, "30")
+            self.in_tsh.delete(0, tk.END)
+            self.in_tsh.insert(0, "120")
+            self._lpg_pipe_data = {
+                "liquid": [
+                    {"name": "Жидкая фаза 1", "length_m": 86.3, "diameter_mm": 52.0, "is_accident": False},
+                    {"name": "Жидкая фаза 2", "length_m": 4.26, "diameter_mm": 42.0, "is_accident": False},
+                    {"name": "Жидкая фаза 3", "length_m": 22.5, "diameter_mm": 35.0, "is_accident": True},
+                ],
+                "vapor": [
+                    {"name": "Паровая фаза 1", "length_m": 29.93, "diameter_mm": 129.0, "is_accident": False},
+                    {"name": "Паровая фаза 2", "length_m": 4.26, "diameter_mm": 42.0, "is_accident": False},
+                ],
+            }
+            self.selected_break_pipe = {"phase": "liquid", "index": 2}
+            self.current_phase.set("liquid")
+            self._load_lpg_phase_rows("liquid")
             return
 
         self.in_p0.delete(0, tk.END)
@@ -525,7 +682,19 @@ class MainWindowTk(tk.Tk):
 
         # Стандартные сценарии с трубопроводами
         inputs: dict = {}
-        if sc.needs_pressure:
+        if sid == "POUO6":
+            self._save_lpg_current_phase_rows()
+            p_liquid = self._parse_float_entry(self.in_p_liquid, 0.0)
+            p_vapor = self._parse_float_entry(self.in_p_vapor, 0.0)
+            inputs["P0_kpa"] = p_liquid
+            inputs["P_liquid_kpa"] = p_liquid
+            inputs["P_vapor_kpa"] = p_vapor
+            inputs["lpg_pipe"] = {
+                "liquid": {"P": p_liquid, "pipes": list(self._lpg_pipe_data["liquid"])},
+                "vapor": {"P": p_vapor, "pipes": list(self._lpg_pipe_data["vapor"])},
+                "selected_break_pipe": dict(self.selected_break_pipe),
+            }
+        elif sc.needs_pressure:
             inputs["P0_kpa"] = self._parse_float_entry(self.in_p0, 0.0)
         if sc.needs_shutoff:
             inputs["t_shutoff_s"] = self._parse_float_entry(self.in_tsh, 0.0)
@@ -534,19 +703,43 @@ class MainWindowTk(tk.Tk):
 
         pipes = []
         accident_index = None
-        for idx, iid in enumerate(self.tree.get_children()):
-            v = self.tree.item(iid, "values")
-            is_acc = (str(v[0]).strip() == "☑")
-            L = float(str(v[1]).replace(",", "."))
-            D = float(str(v[2]).replace(",", "."))
-            pipes.append({
-                "name": f"Участок {idx+1}",
-                "length_m": L,
-                "diameter_mm": D,
-                "is_accident": is_acc,
-            })
-            if is_acc:
-                accident_index = idx
+        source_pipes = (
+            [
+                {**p, "name": f"liquid/{p.get('name', f'Участок {i + 1}')}", "pressure_kpa": inputs["P_liquid_kpa"]}
+                for i, p in enumerate(inputs.get("lpg_pipe", {}).get("liquid", {}).get("pipes", []))
+            ] +
+            [
+                {**p, "name": f"vapor/{p.get('name', f'Участок {i + 1}')}", "pressure_kpa": inputs["P_vapor_kpa"]}
+                for i, p in enumerate(inputs.get("lpg_pipe", {}).get("vapor", {}).get("pipes", []))
+            ]
+            if sid == "POUO6"
+            else None
+        )
+        if source_pipes is not None:
+            for idx, p in enumerate(source_pipes):
+                pipes.append({
+                    "name": p["name"],
+                    "length_m": p["length_m"],
+                    "diameter_mm": p["diameter_mm"],
+                    "is_accident": p.get("is_accident", False),
+                    "pressure_kpa": p.get("pressure_kpa", 0.0),
+                })
+                if pipes[-1]["is_accident"] and accident_index is None:
+                    accident_index = idx
+        else:
+            for idx, iid in enumerate(self.tree.get_children()):
+                v = self.tree.item(iid, "values")
+                is_acc = (str(v[0]).strip() == "☑")
+                L = float(str(v[1]).replace(",", "."))
+                D = float(str(v[2]).replace(",", "."))
+                pipes.append({
+                    "name": f"Участок {idx+1}",
+                    "length_m": L,
+                    "diameter_mm": D,
+                    "is_accident": is_acc,
+                })
+                if is_acc:
+                    accident_index = idx
 
         return {
             "scenario_id": sid,
@@ -577,7 +770,25 @@ class MainWindowTk(tk.Tk):
             if spill.get("duration_s", 0.0) <= 0:
                 errors.append("Заполни время испарения (> 0 с).")
         else:
-            if sc.needs_pressure and data["inputs"].get("P0_kpa", 0.0) <= 0:
+            if data["scenario_id"] == "POUO6":
+                lpg_pipe = data["inputs"].get("lpg_pipe", {})
+                if data["inputs"].get("P_liquid_kpa", 0.0) <= 0:
+                    errors.append("Заполни P_liquid (> 0 кПа).")
+                if data["inputs"].get("P_vapor_kpa", 0.0) <= 0:
+                    errors.append("Заполни P_vapor (> 0 кПа).")
+                if len((lpg_pipe.get("liquid") or {}).get("pipes", [])) == 0:
+                    errors.append("Добавь хотя бы одну трубу жидкой фазы.")
+                if len((lpg_pipe.get("vapor") or {}).get("pipes", [])) == 0:
+                    errors.append("Добавь хотя бы одну трубу паровой фазы.")
+                break_count = sum(
+                    1
+                    for phase in ("liquid", "vapor")
+                    for row in (lpg_pipe.get(phase) or {}).get("pipes", [])
+                    if row.get("is_accident")
+                )
+                if break_count != 1:
+                    errors.append("Для POUO6 должен быть выбран ровно один аварийный участок в обеих фазах.")
+            elif sc.needs_pressure and data["inputs"].get("P0_kpa", 0.0) <= 0:
                 errors.append("Заполни P0_kpa (исходное давление).")
             if sc.needs_shutoff and data["inputs"].get("t_shutoff_s", 0.0) <= 0:
                 errors.append("Заполни t_shutoff_s (время до отсечки).")
@@ -587,7 +798,7 @@ class MainWindowTk(tk.Tk):
             if sc.needs_pipes:
                 if len(data["pipes"]) == 0:
                     errors.append("Добавь хотя бы одну трубу.")
-                if len(data["pipes"]) > 0 and data["accident_index"] is None:
+                if data["scenario_id"] != "POUO6" and len(data["pipes"]) > 0 and data["accident_index"] is None:
                     errors.append("Отметь аварийный участок (☑) в колонке «Авария».")
 
         if errors:
@@ -635,7 +846,7 @@ class MainWindowTk(tk.Tk):
                                 length_m=p["length_m"],
                                 diameter_mm=p["diameter_mm"],
                                 is_accident=p["is_accident"],
-                                pressure_kpa=0.0,
+                                pressure_kpa=float(p.get("pressure_kpa", 0.0) or 0.0),
                             )
                             for p in item["pipes"]
                         ],
@@ -692,6 +903,12 @@ class MainWindowTk(tk.Tk):
                 lines.append(f"  M1T (кг): {round(float(rel.get('M1T_kg', 0.0) or 0.0), 2)}")
                 lines.append(f"  V2T (м³): {round(float(rel.get('V2T_m3', 0.0) or 0.0), 2)}")
                 lines.append(f"  M2T (кг): {round(float(rel.get('M2T_kg', 0.0) or 0.0), 2)}")
+                if rel.get("vapor_mass_kg") is not None:
+                    lines.append(f"  Паровая фаза M_vapor (кг): {round(float(rel.get('vapor_mass_kg') or 0.0), 3)}")
+                if rel.get("liquid_mass_kg") is not None:
+                    lines.append(f"  Жидкая фаза M_liq (кг): {round(float(rel.get('liquid_mass_kg') or 0.0), 2)}")
+                if rel.get("cloud_mass_kg") is not None:
+                    lines.append(f"  Облако m_cloud (кг): {round(float(rel.get('cloud_mass_kg') or 0.0), 2)}")
                 lines.append(
                     f"  Mg total (кг): {round(float(rel.get('M2_total_kg', rel.get('Mg_kg', 0.0)) or 0.0), 2)}")
                 lines.append(f"  m облака (кг): {round(float(rel.get('mr_kg', rel.get('m_cloud_kg', 0.0)) or 0.0), 2)}")

@@ -10,9 +10,11 @@ from app.domain.base import BaseScenario
 
 def _run_jet_fire(ctx: CalculationContext) -> None:
     m_dot = float(ctx.inputs.get("m_dot_kg_s", 0.0))
-    result = calc_jetfire_by_M(M_kg_s=m_dot)
+    K = float(ctx.inputs.get("K", 12.5))
+    Ef = float(ctx.inputs.get("Ef_kw_m2", 80.0))
+    result = calc_jetfire_by_M(M_kg_s=m_dot, K=K, Ef_kw_m2=Ef)
     ctx.results.update(result)
-    ctx.log(f"[jet_fire] m_dot={m_dot:.4f} kg/s")
+    ctx.log(f"[jet_fire] m_dot={m_dot:.4f} kg/s, K={K:.3g}, Ef={Ef:.3g} kW/m2")
 
 
 class JetFireScenario(BaseScenario):
@@ -21,6 +23,8 @@ class JetFireScenario(BaseScenario):
 
     Формат raw_inputs:
       m_dot_kg_s: массовый расход горючего
+      K: optional flame-length coefficient
+      Ef_kw_m2: optional surface emissive power
     """
 
     scenario_type = "jet_fire"
