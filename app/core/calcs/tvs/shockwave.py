@@ -184,9 +184,15 @@ def run_shockwave(ctx: CalculationContext) -> ShockwaveResult:
     # Масштаб длины по методике
     L_scale = (E / P0) ** (1.0 / 3.0)
 
-    # Скорость фронта нужна только для дефлаграции (диапазоны 2–6)
+    # Скорость фронта нужна только для дефлаграции (диапазоны 2–6).
+    # Для POUO1-DT методология фиксирует Vg=200 м/с (верх диапазона 4);
+    # остальные сценарии продолжают использовать выбор по range_id.
     m_cloud = float(ctx.intermediate.get("m_cloud_kg", 0.0))
-    Vg = _choose_vg(range_id, m_cloud) if effective_mode == "deflagration" else None
+    Vg_override = sh.get("Vg_m_s")
+    if effective_mode == "deflagration":
+        Vg = float(Vg_override) if Vg_override is not None else _choose_vg(range_id, m_cloud)
+    else:
+        Vg = None
 
     # Массивы результата
     Rx_list: List[float] = []

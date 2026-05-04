@@ -46,11 +46,13 @@ from app.core.calcs.fire.jet_fire import calc_jetfire_by_M
 def _run_fireball_from_cloud(ctx: CalculationContext) -> None:
     """
     Огненный шар из паровоздушного облака (diesel).
-    Масса = масса испарившегося топлива (m_evap_kg).
-    Ef берётся из fuel.Ef_fireball_kw_m2 (ГОСТ Б.1, дизель ≈ 47 кВт/м²).
+    Масса = масса испарившегося топлива (m_evap_kg), как в
+    METHODOLOGY_POUO1_DT.md. ENGINEER_CHECK: консервативный вариант с
+    m_total_kg отмечен в методологии как требующий проверки.
+    Ef берётся из fuel.Ef_fireball_kw_m2 (для DT-шаблона принято 25 кВт/м²).
     """
     m_kg = float(ctx.intermediate.get("m_evap_kg", 0.0))
-    Ef = float(ctx.inputs["fuel"].get("Ef_fireball_kw_m2", 47.0))
+    Ef = float(ctx.inputs["fuel"].get("Ef_fireball_kw_m2", 25.0))
     result = calc_fireball_by_M(m_kg=m_kg, Ef_kw_m2=Ef)
     ctx.results["fireball"] = result
     ctx.log(f"[fireball_cloud] m={m_kg:.2f} кг, Ef={Ef} кВт/м²")

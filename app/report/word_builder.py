@@ -19,7 +19,7 @@ from docx.oxml.ns import qn
 
 # Один код сценария (как в POUO.code / SCENARIOS) → один файл шаблона в app/report/templates/
 WORD_TEMPLATE_BY_SCENARIO: Dict[str, str] = {
-    "POUO1": "templatePOUO1.docx",
+    "POUO1": "templatePOUO1_SUG.docx",
     "POUO2": "templatePOUO2.docx",
     "POUO3": "templatePOUO3.docx",
     "POUO4": "templatePOUO4.docx",
@@ -73,6 +73,19 @@ def word_template_filename_for_scenario(scenario_code: str) -> str:
     return fn
 
 
+def _word_template_filename_for_pouo(code: str, fuel_id: str = "") -> str:
+    """
+    Выбор шаблона с учётом топлива там, где один code имеет разные формы.
+    Для POUO1 дизель и СУГ считаются по разным Word-шаблонам.
+    """
+    if code == "POUO1":
+        fuel_norm = (fuel_id or "").strip().lower()
+        if fuel_norm in {"diesel", "diesel_fuel", "дизель", "дизтопливо"}:
+            return "templatePOUO1_DT.docx"
+        return "templatePOUO1_SUG.docx"
+    return word_template_filename_for_scenario(code)
+
+
 def resolve_word_template_path(
     project: Any,
     templates_dir: str | Path | None = None,
@@ -85,7 +98,18 @@ def resolve_word_template_path(
     """
     base = Path(templates_dir) if templates_dir else default_word_templates_dir()
     code = _one_template_code_from_project(project)
-    filename = word_template_filename_for_scenario(code)
+    pouos = getattr(project, "pouos", None) or []
+    fuel_ids = {
+        str(getattr(p, "fuel_id", "") or "").strip().lower()
+        for p in pouos
+        if getattr(p, "code", "") == code
+    }
+    if code == "POUO1" and len(fuel_ids) > 1:
+        raise ValueError(
+            "Для POUO1 найдены разные типы топлива в одном Word-файле: "
+            f"{', '.join(sorted(fuel_ids))}. Сформируйте отчёты отдельно."
+        )
+    filename = _word_template_filename_for_pouo(code, next(iter(fuel_ids), ""))
     path = base / filename
     if not path.is_file():
         raise FileNotFoundError(
@@ -97,13 +121,15 @@ def resolve_word_template_path(
 def word_template_debug_line(project: Any, templates_dir: str | Path | None = None) -> str:
     """Строка для отладки: шаблоны по каждому коду ПОУО (порядок как в project.pouos)."""
     base = Path(templates_dir) if templates_dir else default_word_templates_dir()
-    _, order = group_pouos_by_code(project)
+    groups, order = group_pouos_by_code(project)
     if not order:
         return "Шаблон Word: в проекте нет ПОУО."
     lines: List[str] = ["Шаблоны Word (порядок первого появления кода в проекте):"]
     for code in order:
+        first_pouo = (groups.get(code) or [None])[0]
+        fuel_id = str(getattr(first_pouo, "fuel_id", "") or "") if first_pouo is not None else ""
         try:
-            filename = word_template_filename_for_scenario(code)
+            filename = _word_template_filename_for_pouo(code, fuel_id)
         except ValueError as e:
             lines.append(f"  • {code}: {e}")
             continue
@@ -116,6 +142,7 @@ def word_template_debug_line(project: Any, templates_dir: str | Path | None = No
 
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm, Pt
+from jinja2 import Environment, StrictUndefined, UndefinedError
 
 from app.core.fuels import get_fuel
 
@@ -443,6 +470,9 @@ def _build_jetfire_block(results: Dict[str, Any]) -> Dict[str, Any]:
     Для СУГ (tank_park) в results["jet_fire"] может быть вложенный блок peak.
     """
     jf = (results or {}).get("jet_fire", {}) or {}
+    if not jf:
+        return {"skip_reason": "jet_fire не рассчитывается для выбранного топлива."}
+
     params = jf.get("params", {}) or {}
 
     table = _jetfire_table_rows(jf.get("table"))
@@ -557,6 +587,8 @@ def _build_tvs_block(results: Dict[str, Any]) -> Dict[str, Any]:
       - prob_heavy
     """
     tvs = (results or {}).get("tvs_explosion", {}) or {}
+    if not tvs:
+        return {"skip_reason": "tvs_explosion не рассчитывается для выбранного топлива."}
 
     inputs = tvs.get("inputs", {}) or {}
     intermediate = tvs.get("intermediate", {}) or {}
@@ -674,6 +706,7 @@ def _build_tank_park_block(results: Dict[str, Any]) -> Dict[str, Any]:
     fuel_id = str(meta.get("fuel_id", "") or "")
 
     tank_in = tp_in.get("tank", {}) or {}
+    spill_in = tp_in.get("spill", {}) or {}
     lpg_in = tp_in.get("lpg", {}) or {}
     site_in = tp_in.get("site", {}) or {}
 
@@ -717,12 +750,13 @@ def _build_tank_park_block(results: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         rho_v = 1.83
 
-    V_gvs_m3 = (V_liquid_m3 * exp_f) if V_liquid_m3 is not None else None
-    m_gvs_kg = (V_gvs_m3 * rho_v) if V_gvs_m3 is not None else None
+    is_lpg_context = fuel_id == "lpg"
+    V_gvs_m3 = (V_liquid_m3 * exp_f) if is_lpg_context and V_liquid_m3 is not None else None
+    m_gvs_kg = (V_gvs_m3 * rho_v) if is_lpg_context and V_gvs_m3 is not None else None
 
     nozzle_r = lpg_in.get("nozzle_radius_m")
     A_hol = None
-    if nozzle_r is not None:
+    if is_lpg_context and nozzle_r is not None:
         try:
             nr = float(nozzle_r)
             if nr > 0:
@@ -736,27 +770,27 @@ def _build_tank_park_block(results: Dict[str, Any]) -> Dict[str, Any]:
     P_vessel_MPa = P_crit_MPa = P_atm_MPa = None
     try:
         P_atm = float((tp_in.get("env") or {}).get("P0_Pa", 101_325) or 101_325)
-        P_atm_MPa = round(P_atm / 1e6, 3)
+        P_atm_MPa = round(P_atm / 1e6, 3) if is_lpg_context else None
     except (TypeError, ValueError):
         P_atm = 101_325.0
-        P_atm_MPa = round(P_atm / 1e6, 3)
+        P_atm_MPa = round(P_atm / 1e6, 3) if is_lpg_context else None
     try:
-        if P_v is not None and P_c is not None and float(P_c) != 0:
+        if is_lpg_context and P_v is not None and P_c is not None and float(P_c) != 0:
             PR1 = round(float(P_v) / float(P_c), 9)
     except (TypeError, ValueError):
         pass
     try:
-        if P_c is not None and float(P_c) != 0:
+        if is_lpg_context and P_c is not None and float(P_c) != 0:
             PR2 = round(P_atm / float(P_c), 9)
     except (TypeError, ValueError):
         pass
     try:
-        if P_v is not None:
+        if is_lpg_context and P_v is not None:
             P_vessel_MPa = round(float(P_v) / 1e6, 2)
     except (TypeError, ValueError):
         pass
     try:
-        if P_c is not None:
+        if is_lpg_context and P_c is not None:
             P_crit_MPa = round(float(P_c) / 1e6, 2)
     except (TypeError, ValueError):
         pass
@@ -783,6 +817,15 @@ def _build_tank_park_block(results: Dict[str, Any]) -> Dict[str, Any]:
 
     jf_params = jf_raw.get("params") or {}
     direct_flame_r_m = _round_if_number(jf_params.get("DF_m"), 1)
+    fireball_raw = (results or {}).get("fireball") or {}
+    fireball_params = fireball_raw.get("params") or {}
+    pool_raw = (results or {}).get("pool_fire") or {}
+    pool_params = pool_raw.get("params") or {}
+    tvs_raw = (results or {}).get("tvs_explosion") or {}
+    try:
+        V_dt_total_m3 = float(inter.get("m_total_kg")) / float(inter.get("rho_liq_kg_m3"))
+    except (TypeError, ValueError, ZeroDivisionError):
+        V_dt_total_m3 = None
 
     return {
         "fuel_id":        fuel_id,
@@ -790,6 +833,26 @@ def _build_tank_park_block(results: Dict[str, Any]) -> Dict[str, Any]:
         "count":          inter.get("count"),
         "m_total_kg":     _round_if_number(inter.get("m_total_kg"), 1),
         # diesel
+        "ps":             _round_if_number(inter.get("Pnas_kpa"), 3),
+        "rho_p":          _round_if_number(inter.get("rho_vapor_kg_m3"), 3),
+        "w_evap":         _round_if_number(inter.get("W_evap_kg_m2_s"), 8),
+        "m_dt":           _round_if_number(inter.get("m_total_kg"), 1),
+        "v_dt":           _round_if_number(V_dt_total_m3, 2),
+        "spill_area":     _round_if_number(spill_in.get("area_m2"), 2),
+        "m_i":            _round_if_number(inter.get("m_evap_kg"), 2),
+        "r_nkpr":         _round_if_number(inter.get("R_NKPR_m"), 2),
+        "r_pvs":          _round_if_number(inter.get("R_PVS_m"), 2),
+        "k_stoich":       _round_if_number(inter.get("k_stoich"), 3),
+        "c_st":           _round_if_number(inter.get("C_st_pct"), 3),
+        "m_g":            _round_if_number(inter.get("m_cloud_kg"), 3),
+        "e_total":        _round_if_number(inter.get("E_J"), 2),
+        "tvs_table":      tvs_raw.get("table", []),
+        "ds_fb":          _round_if_number(fireball_params.get("Ds_m"), 2),
+        "ts_fb":          _round_if_number(fireball_params.get("ts_s"), 2),
+        "q_fb_table":     fireball_raw.get("table", []),
+        "d_pool":         _round_if_number(pool_params.get("D_pool_m") or pool_params.get("d_eff_m"), 2),
+        "h_flame":        _round_if_number(pool_params.get("LF_m") or pool_params.get("H_flame_m"), 2),
+        "q_pool_table":   pool_raw.get("table", []),
         "W_evap_kg_m2_s": _round_if_number(inter.get("W_evap_kg_m2_s"), 6),
         "m_evap_kg":      _round_if_number(inter.get("m_evap_kg"), 2),
         "m_cloud_kg":     _round_if_number(inter.get("m_cloud_kg"), 2),
@@ -980,13 +1043,49 @@ def render_report(template_path: str, output_path: str, project) -> None:
     logger.debug("Строим контекст для docxtpl")
     ctx = build_context(project, doc=doc)
 
-    logger.debug("Рендерим шаблон")
-    doc.render(ctx)
+    try:
+        template_vars = sorted(doc.get_undeclared_template_variables())
+    except Exception:
+        template_vars = []
+        logger.exception("Не удалось получить список Jinja-переменных шаблона %s", template_path)
+
+    logger.debug(
+        "Рендерим шаблон. template=%s, output=%s, vars=%s, context_keys=%s",
+        template_path,
+        output_path,
+        template_vars,
+        sorted(ctx.keys()),
+    )
+    try:
+        jinja_env = Environment(undefined=StrictUndefined)
+        doc.render(ctx, jinja_env=jinja_env)
+    except UndefinedError as exc:
+        logger.exception(
+            "Ошибка Jinja при генерации отчёта: отсутствует переменная. "
+            "template=%s, output=%s, vars=%s",
+            template_path,
+            output_path,
+            template_vars,
+        )
+        raise RuntimeError(
+            f"Не удалось сгенерировать Word-отчёт: в шаблоне отсутствуют данные для Jinja-поля: {exc}"
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "Ошибка генерации Word-отчёта. template=%s, output=%s, vars=%s",
+            template_path,
+            output_path,
+            template_vars,
+        )
+        raise RuntimeError(f"Не удалось сгенерировать Word-отчёт: {exc}") from exc
 
     logger.debug("Сохраняем: %s", output_path)
     doc.save(output_path)
 
-    logger.debug("Отчёт сохранён")
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError(f"Word-отчёт не был создан или пустой: {output_path}")
+
+    logger.debug("Отчёт сохранён: %s (%s байт)", output_path, os.path.getsize(output_path))
 
 
 def render_report_for_project(

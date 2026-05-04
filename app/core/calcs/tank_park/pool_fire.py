@@ -36,7 +36,8 @@ from app.core.calcs.fire.jet_fire import _fq_gost   # переиспользуе
 
 
 # Физические константы
-_RHO_AIR = 1.2      # кг/м³
+# Значение из METHODOLOGY_POUO1_DT.md / templatePOUO1_DT.docx.
+_RHO_AIR = 1.1455   # кг/м³
 _G       = 9.81     # м/с²
 _ATM_ABS = 7e-4     # коэффициент поглощения атмосферы (ГОСТ Б.4)
 
@@ -136,9 +137,12 @@ def calc_pool_fire(
         "params": {
             "area_m2":            round(area_m2, 2),
             "D_pool_m":           round(D, 2),
+            "d_eff_m":            round(D, 2),
             "LF_m":               round(LF, 2),
+            "H_flame_m":          round(LF, 2),
             "H_center_m":         round(H_c, 2),
             "burn_rate_kg_m2_s":  float(burn_rate_kg_m2_s),
+            "rho_air_kg_m3":      _RHO_AIR,
             "Ef_kw_m2":           float(Ef_kw_m2),
         },
         "table": rows,

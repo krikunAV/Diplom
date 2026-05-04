@@ -198,15 +198,26 @@ def _build_tank_park_inputs(
     if pouo.fuel_id == "diesel":
         fuel_section: Dict[str, Any] = {
             "id":                    "diesel",
-            "rho_liq":               fuel.rho_liq,
-            "eud0_j_per_kg":         fuel.eud0_j_per_kg,
-            # Константы испарения (ГОСТ К.1) — Pnas в кПа при расчётной температуре
+            "rho_liq":               cfg.diesel_rho_liq_kg_m3,
+            "eud0_j_per_kg":         cfg.diesel_eud0_j_per_kg,
+            # Константы испарения (METHODOLOGY_POUO1_DT.md, Р.2)
             "Pnas_kpa":              cfg.diesel_Pnas_kpa,
             "M_g_mol":               cfg.diesel_M_g_mol,
+            "T_calc_C":              cfg.diesel_calc_temp_c,
+            "antoine_A":             cfg.diesel_antoine_A,
+            "antoine_B":             cfg.diesel_antoine_B,
+            "antoine_C":             cfg.diesel_antoine_C,
+            "lower_flammability_pct": cfg.diesel_lower_flammability_pct,
+            "formula_nC":            cfg.diesel_formula_nC,
+            "formula_nH":            cfg.diesel_formula_nH,
+            "formula_nX":            cfg.diesel_formula_nX,
+            "formula_nO":            cfg.diesel_formula_nO,
             # Параметры пожара пролива
             "Ef_pool_kw_m2":         cfg.diesel_Ef_pool_kw_m2,
             "burn_rate_kg_m2_s":     cfg.diesel_burn_rate_kg_m2_s,
-            # Параметры огненного шара (ГОСТ Б.1, дизель)
+            # Параметры огненного шара.
+            # ENGINEER_CHECK: 25 кВт/м² принято по DT-шаблону; ГОСТ-значение
+            # 47 кВт/м² оставлено спорным местом в методологии.
             "Ef_fireball_kw_m2":     cfg.diesel_Ef_fireball_kw_m2,
         }
         substance: Dict[str, Any] = {
@@ -272,7 +283,10 @@ def _build_tank_park_inputs(
         "shockwave": {
             "r_grid_m":      [0, 1, 2, 3, 5] + list(range(10, 101, 5)) + [125, 150, 200],
             "explosion_mode": "deflagration",
-            "range_id":      cfg.tvs_range_id,
+            "range_id":      cfg.diesel_tvs_range_id if pouo.fuel_id == "diesel" else cfg.tvs_range_id,
+            # Только diesel POUO1: методология принимает Vg=200 м/с как
+            # верхнюю границу диапазона 4 для загромождённого пространства.
+            "Vg_m_s":        cfg.diesel_tvs_vg_m_s if pouo.fuel_id == "diesel" else None,
         },
         "exposure": exposure_section,
     }

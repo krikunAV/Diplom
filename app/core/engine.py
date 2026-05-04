@@ -12,6 +12,8 @@
 #
 from __future__ import annotations
 
+import logging
+
 from app.pipeline.config import EngineConfig  # re-export
 from app.pipeline.runner import (
     run_pouo,
@@ -20,6 +22,8 @@ from app.pipeline.runner import (
     project_to_input,
 )
 from app.core.models import POUO, Project
+
+logger = logging.getLogger(__name__)
 
 
 def _pouo_result_to_legacy(p: POUO, pouo_result) -> None:
@@ -193,7 +197,7 @@ def compute_for_pouo(p: POUO, cfg: EngineConfig | None = None) -> None:
                 pouo_code=p.code,
             )
         except Exception:
-            pass
+            logger.exception("Не удалось построить графики для %s; расчёт не прерывается.", p.code)
 
 
 def compute_project(project: Project, cfg: EngineConfig | None = None) -> None:

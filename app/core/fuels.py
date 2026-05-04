@@ -17,7 +17,11 @@ class Fuel:
 FUELS: dict[str, Fuel] = {
     "natgas": Fuel(id="natgas", title="Природный газ", eud0_j_per_kg=5.0e7, rho_liq=0.0),
     "lpg": Fuel(id="lpg", title="СУГ (пропан-бутан)", eud0_j_per_kg=4.6e7, rho_liq=520.0),
-    "diesel": Fuel(id="diesel", title="Дизельное топливо", eud0_j_per_kg=4.3e7, rho_liq=830.0),
+    # POUO1-DT uses the constants fixed in templatePOUO1_DT.docx and
+    # docs/methodology/METHODOLOGY_POUO1_DT.md.
+    # ENGINEER_CHECK: rho=860 kg/m3 should be replaced by passport data
+    # for the actual diesel grade when available.
+    "diesel": Fuel(id="diesel", title="Дизельное топливо", eud0_j_per_kg=43.59e6, rho_liq=860.0),
 }
 
 ALIASES: dict[str, str] = {
