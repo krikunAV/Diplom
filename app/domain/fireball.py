@@ -12,6 +12,10 @@ def _run_fireball(ctx: CalculationContext) -> None:
     m_kg = float(ctx.inputs.get("m_kg", 0.0))
     Ef = float(ctx.inputs.get("Ef_kw_m2", 80.0))
     result = calc_fireball_by_M(m_kg=m_kg, Ef_kw_m2=Ef)
+    if ctx.inputs.get("mass_basis"):
+        result["mass_basis"] = ctx.inputs["mass_basis"]
+    if ctx.inputs.get("note"):
+        result["note"] = ctx.inputs["note"]
     ctx.results.update(result)
     ctx.log(f"[fireball] m={m_kg:.2f} kg, Ef={Ef:.3g} kW/m2")
 

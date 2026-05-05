@@ -61,6 +61,131 @@ def _pouo_result_to_legacy(p: POUO, pouo_result) -> None:
             p.results[key] = sr.error
             return
 
+    # ── POUO3: indoor natgas ─────────────────────────────────────────────────
+    indoor_sr = pouo_result.scenarios.get("indoor_natgas")
+    if indoor_sr:
+        if indoor_sr.ok:
+            ctx = indoor_sr.ctx
+            inter = ctx.intermediate
+            res = ctx.results
+            rel_inputs = ctx.inputs.get("release", {}) if ctx.inputs else {}
+            subst_inputs = ctx.inputs.get("substance", {}) if ctx.inputs else {}
+            cloud_inputs = ctx.inputs.get("cloud", {}) if ctx.inputs else {}
+            room_inputs = ctx.inputs.get("room", {}) if ctx.inputs else {}
+            acc_pipe = next((pipe for pipe in p.pipes if getattr(pipe, "is_accident", False)), None)
+            acc_pipe = acc_pipe or (p.pipes[0] if p.pipes else None)
+
+            p.results["room"] = {
+                "V_room_m3": float(p.inputs.get("V_room_m3", 0.0) or 0.0),
+                "V_free_m3": room_inputs.get("V_free_m3"),
+                "Pmax_kPa": room_inputs.get("Pmax_kPa"),
+                "P0_kPa": room_inputs.get("P0_kPa"),
+                "Kn": room_inputs.get("Kn"),
+                "C_st_percent": room_inputs.get("C_st_percent"),
+            }
+            p.results["release"] = {
+                "accident_pipe": (acc_pipe.name if acc_pipe else ""),
+                "P_up_kpa": (
+                    float(rel_inputs.get("Pg_Pa", 0.0) or 0.0) / 1000.0
+                ),
+                "P2_kpa": (ctx.inputs.get("isolated_section", {}) or {}).get("P2_kPa"),
+                "d_hole_mm": float(acc_pipe.diameter_mm) if acc_pipe else 0.0,
+                "d_m": rel_inputs.get("orifice_d_m"),
+                "t_shutoff_s": rel_inputs.get("t_shutoff_s"),
+                "T_K": rel_inputs.get("T_K"),
+                "R0_J_kgK": rel_inputs.get("R0_J_kgK"),
+                "rho_n_kg_m3": subst_inputs.get("rho_gas_kg_m3"),
+                "Z": cloud_inputs.get("Z"),
+                "F_m2": inter.get("F_m2"),
+                "v_g_m3_kg": inter.get("v_g_m3_kg"),
+                "m_dot_kg_s": inter.get("m_dot_kg_s"),
+                "G_kg_s": inter.get("m_dot_kg_s"),
+                "M1T_kg": inter.get("M1T_kg"),
+                "V1T_m3": inter.get("V1T_m3"),
+                "sum_r2L_m3": inter.get("sum_r2L_m3"),
+                "V2T_m3": inter.get("V2T_m3"),
+                "M2T_kg": inter.get("M2T_kg"),
+                "Mg_kg": inter.get("Mg_kg"),
+                "M_total_kg": inter.get("Mg_kg"),
+                "cloud_mass_kg": inter.get("m_cloud_kg"),
+                "m_cloud_kg": inter.get("m_cloud_kg"),
+            }
+            p.results["indoor_explosion"] = {
+                "inputs": ctx.inputs,
+                "intermediate": inter,
+                "results": res,
+                "logs": ctx.logs,
+                "deltaP_kPa": res.get("deltaP_kPa"),
+                "deltaP_Pa": res.get("deltaP_Pa"),
+            }
+        else:
+            p.results["error"] = indoor_sr.error
+
+    # ── POUO4: indoor LPG ────────────────────────────────────────────────────
+    indoor_lpg_sr = pouo_result.scenarios.get("indoor_lpg")
+    if indoor_lpg_sr:
+        if indoor_lpg_sr.ok:
+            ctx = indoor_lpg_sr.ctx
+            inter = ctx.intermediate
+            res = ctx.results
+            rel_inputs = ctx.inputs.get("release", {}) if ctx.inputs else {}
+            subst_inputs = ctx.inputs.get("substance", {}) if ctx.inputs else {}
+            cloud_inputs = ctx.inputs.get("cloud", {}) if ctx.inputs else {}
+            room_inputs = ctx.inputs.get("room", {}) if ctx.inputs else {}
+            acc_pipe = next((pipe for pipe in p.pipes if getattr(pipe, "is_accident", False)), None)
+            acc_pipe = acc_pipe or (p.pipes[0] if p.pipes else None)
+
+            p.results["room"] = {
+                "V_room_m3": float(p.inputs.get("V_room_m3", 0.0) or 0.0),
+                "V_free_m3": room_inputs.get("V_free_m3"),
+                "Pmax_kPa": room_inputs.get("Pmax_kPa"),
+                "P0_kPa": room_inputs.get("P0_kPa"),
+                "Kn": room_inputs.get("Kn"),
+                "C_st_percent": room_inputs.get("C_st_percent"),
+            }
+            p.results["release"] = {
+                "accident_pipe": (acc_pipe.name if acc_pipe else ""),
+                "P_up_kpa": (
+                    float(rel_inputs.get("Pg_Pa", 0.0) or 0.0) / 1000.0
+                ),
+                "P2_kpa": (ctx.inputs.get("isolated_section", {}) or {}).get("P2_kPa"),
+                "d_hole_mm": float(acc_pipe.diameter_mm) if acc_pipe else 0.0,
+                "d_m": rel_inputs.get("orifice_d_m"),
+                "t_shutoff_s": rel_inputs.get("t_shutoff_s"),
+                "T_K": rel_inputs.get("T_K"),
+                "R0_J_kgK": rel_inputs.get("R0_J_kgK"),
+                "rho_n_kg_m3": subst_inputs.get("rho_gas_kg_m3"),
+                "rho_gas_kg_m3": subst_inputs.get("rho_gas_kg_m3"),
+                "rho_pipe_kg_m3": subst_inputs.get("rho_pipe_kg_m3"),
+                "molar_mass_kg_kmol": subst_inputs.get("molar_mass_kg_kmol"),
+                "V0_m3_kmol": subst_inputs.get("V0_m3_kmol"),
+                "tp_C": subst_inputs.get("tp_C"),
+                "Z": cloud_inputs.get("Z"),
+                "F_m2": inter.get("F_m2"),
+                "v_g_m3_kg": inter.get("v_g_m3_kg"),
+                "m_dot_kg_s": inter.get("m_dot_kg_s"),
+                "G_kg_s": inter.get("m_dot_kg_s"),
+                "M1T_kg": inter.get("M1T_kg"),
+                "V1T_m3": inter.get("V1T_m3"),
+                "sum_r2L_m3": inter.get("sum_r2L_m3"),
+                "V2T_m3": inter.get("V2T_m3"),
+                "M2T_kg": inter.get("M2T_kg"),
+                "Mg_kg": inter.get("Mg_kg"),
+                "M_total_kg": inter.get("Mg_kg"),
+                "cloud_mass_kg": inter.get("m_cloud_kg"),
+                "m_cloud_kg": inter.get("m_cloud_kg"),
+            }
+            p.results["indoor_explosion"] = {
+                "inputs": ctx.inputs,
+                "intermediate": inter,
+                "results": res,
+                "logs": ctx.logs,
+                "deltaP_kPa": res.get("deltaP_kPa"),
+                "deltaP_Pa": res.get("deltaP_Pa"),
+            }
+        else:
+            p.results["error"] = indoor_lpg_sr.error
+
     # ── TVS ──────────────────────────────────────────────────────────────────
     tvs_sr = pouo_result.scenarios.get("tvs_explosion")
     if tvs_sr and tvs_sr.ok:
@@ -149,6 +274,15 @@ def _pouo_result_to_legacy(p: POUO, pouo_result) -> None:
             p.results["jet_fire"] = dict(jf_sr.ctx.results)
         else:
             p.results["jet_fire"] = {"skip_reason": jf_sr.error}
+    else:
+        jf_stub_sr = pouo_result.scenarios.get("jet_fire_stub")
+        if not jf_stub_sr:
+            jf_stub_sr = pouo_result.scenarios.get("lpg_jet_fire_stub")
+        if jf_stub_sr:
+            if jf_stub_sr.ok:
+                p.results["jet_fire"] = dict(jf_stub_sr.ctx.results)
+            else:
+                p.results["jet_fire"] = {"skip_reason": jf_stub_sr.error}
 
     # ── Fireball ─────────────────────────────────────────────────────────────
     fb_sr = pouo_result.scenarios.get("fireball")

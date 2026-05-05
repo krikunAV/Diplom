@@ -465,6 +465,69 @@ def _build_release_block(results: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _build_indoor_explosion_block(results: Dict[str, Any]) -> Dict[str, Any]:
+    """Подготовка блока POUO3/POUO4: избыточное давление взрыва в помещении."""
+    indoor = (results or {}).get("indoor_explosion", {}) or {}
+    if not indoor:
+        return {"skip_reason": "indoor_explosion не рассчитывается для выбранного сценария."}
+
+    res = indoor.get("results", {}) or {}
+    inter = indoor.get("intermediate", {}) or {}
+    inputs = indoor.get("inputs", {}) or {}
+    meta = inputs.get("meta", {}) or {}
+    scenario_id = str(meta.get("scenario_id", ""))
+    is_lpg = scenario_id.startswith("INDOOR_LPG")
+    delta_p = indoor.get("deltaP_kPa", res.get("deltaP_kPa"))
+    mass_cloud = res.get("mass_cloud_kg", res.get("m_cloud_kg", inter.get("m_cloud_kg")))
+    mass_total = res.get("mass_total_kg", res.get("Mg_kg", inter.get("Mg_kg")))
+    volume_free = res.get("Vsv_m3", res.get("V_free_m3"))
+    substance = inputs.get("substance", {}) or {}
+
+    conclusion = ""
+    try:
+        if float(delta_p) < 5.0:
+            conclusion = "Разрушений не происходит, угрозы персоналу нет."
+    except (TypeError, ValueError):
+        pass
+
+    return {
+        "section_title": (
+            "9.1 Расчёт параметров волны давления при разрыве газопровода в замкнутом пространстве"
+            if is_lpg
+            else "8.1 Взрыв в помещении"
+        ),
+        "inputs": _to_dict(inputs),
+        "intermediate": {
+            k: _round_if_number(v, 6)
+            for k, v in inter.items()
+            if not isinstance(v, (list, dict, tuple))
+        },
+        "results": _to_dict(res),
+        "delta_p": _round_if_number(delta_p, 4),
+        "deltaP_kPa": _round_if_number(delta_p, 4),
+        "deltaP_Pa": _round_if_number(indoor.get("deltaP_Pa", res.get("deltaP_Pa")), 2),
+        "mass_cloud": _round_if_number(mass_cloud, 3),
+        "mass_total": _round_if_number(mass_total, 3),
+        "volume_free": _round_if_number(volume_free, 2),
+        "rho_gas": _round_if_number(res.get("rho_gas_kg_m3", substance.get("rho_gas_kg_m3")), 3),
+        "rho_pipe": _round_if_number(substance.get("rho_pipe_kg_m3", inter.get("rho_pipe_kg_m3")), 3),
+        "V_free_m3": _round_if_number(volume_free, 2),
+        "Pmax_kPa": _round_if_number(res.get("Pmax_kPa"), 2),
+        "P0_kPa": _round_if_number(res.get("P0_kPa"), 2),
+        "Kn": _round_if_number(res.get("Kn"), 2),
+        "C_st_percent": _round_if_number(res.get("C_st_percent"), 3),
+        "m_cloud_kg": _round_if_number(mass_cloud, 3),
+        "F_m2": _round_if_number(inter.get("F_m2"), 6),
+        "m_dot_kg_s": _round_if_number(inter.get("m_dot_kg_s"), 3),
+        "M1T_kg": _round_if_number(inter.get("M1T_kg"), 3),
+        "V2T_m3": _round_if_number(inter.get("V2T_m3"), 3),
+        "M2T_kg": _round_if_number(inter.get("M2T_kg"), 3),
+        "conclusion": conclusion,
+        "logs": indoor.get("logs", []) or [],
+        "skip_reason": indoor.get("skip_reason"),
+    }
+
+
 def _build_lpg_pipe_block(results: Dict[str, Any]) -> Dict[str, Any]:
     """
     Convenience block for POUO6 templates.
@@ -562,6 +625,16 @@ def _build_jetfire_block(results: Dict[str, Any]) -> Dict[str, Any]:
     if not jf:
         return {"skip_reason": "jet_fire не рассчитывается для выбранного топлива."}
 
+    if jf.get("skipped") or (jf.get("skip_reason") and not jf.get("params")):
+        reason = jf.get("reason") or jf.get("skip_reason")
+        return {
+            "skipped": True,
+            "reason": reason,
+            "skip_reason": reason,
+            "m_dot_kg_s": _round_if_number(jf.get("m_dot_kg_s"), 4),
+            "duration_s": _round_if_number(jf.get("duration_s"), 2),
+        }
+
     params = jf.get("params", {}) or {}
 
     table = _jetfire_table_rows(jf.get("table"))
@@ -657,6 +730,15 @@ def _build_fireball_block(results: Dict[str, Any]) -> Dict[str, Any]:
         "params": {k: _round_if_number(v) for k, v in params.items()},
         "table": table,
         "zones": zones,
+        "m_kg": _round_if_number(params.get("m_kg")),
+        "Ds_m": _round_if_number(params.get("Ds_m")),
+        "H_m": _round_if_number(params.get("H_m")),
+        "ts_s": _round_if_number(params.get("ts_s")),
+        "Ef_kw_m2": _round_if_number(params.get("Ef_kw_m2")),
+        "radiation_table": table,
+        "damage_zones": zones,
+        "mass_basis": fb.get("mass_basis"),
+        "note": fb.get("note"),
         "skip_reason": fb.get("skip_reason"),
     }
 
@@ -1045,16 +1127,19 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
                 "length_m": pipe.get("length_m"),
             })
 
+        code = getattr(p, "code", "")
+
         # ---------------- Подготовка расчётных блоков ----------------
         release_block = _build_release_block(raw_results)
         jetfire_block = _build_jetfire_block(raw_results)
         fireball_block = _build_fireball_block(raw_results)
-        tvs_block = _build_tvs_block(raw_results)
+        indoor_explosion_block = _build_indoor_explosion_block(raw_results)
+        is_indoor_pipe_scenario = code in {"POUO3", "POUO4"}
+        tvs_block = {} if is_indoor_pipe_scenario else _build_tvs_block(raw_results)
         pool_fire_block = _build_pool_fire_block(raw_results)
         tank_park_block = _build_tank_park_block(raw_results)
         lpg_pipe_block = _build_lpg_pipe_block(raw_results)
 
-        code = getattr(p, "code", "")
         charts_dir = os.path.join("out", "charts")
 
         tvs_dp_path = os.path.join(charts_dir, f"tvs_dp_{code}.png")
@@ -1084,6 +1169,7 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             "jet_fire": jetfire_block,
             "fireball": fireball_block,
             "tvs": tvs_block,
+            "indoor_explosion": indoor_explosion_block,
             "pool_fire": pool_fire_block,
             "tank_park": tank_park_block,
             "lpg_pipe": lpg_pipe_block,
@@ -1098,7 +1184,10 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             "has_release":   bool(release_block   and not release_block.get("skip_reason")),
             "has_jet_fire":  bool(jetfire_block    and not jetfire_block.get("skip_reason")),
             "has_fireball":  bool(fireball_block   and not fireball_block.get("skip_reason")),
-            "has_tvs":       bool(tvs_block        and not tvs_block.get("skip_reason")),
+            "has_tvs":       bool(not is_indoor_pipe_scenario and tvs_block and not tvs_block.get("skip_reason")),
+            "has_indoor_explosion": bool(
+                indoor_explosion_block and not indoor_explosion_block.get("skip_reason")
+            ),
             "has_pool_fire": bool(pool_fire_block  and not pool_fire_block.get("skip_reason")
                                   and pool_fire_block.get("zones")),
             "has_lpg_pipe":  bool(code == "POUO6" and not raw_results.get("error")),
@@ -1108,14 +1197,132 @@ def build_context(project, doc: DocxTemplate | None = None) -> Dict[str, Any]:
             "error_text":    raw_results.get("error"),
         }
 
+        if is_indoor_pipe_scenario:
+            for key in (
+                "tvs",
+                "lpg_pipe",
+                "tvs_dp_chart_path",
+                "tvs_imp_chart_path",
+                "tvs_dp_chart_img",
+                "tvs_imp_chart_img",
+                "tvs_explosion",
+                "wind_zones",
+                "shockwave",
+                "tvs_damage_zones",
+                "Eud",
+                "Cg",
+                "Cst",
+                "E",
+            ):
+                p_dict.pop(key, None)
+            p_dict["has_tvs"] = False
+            # POUO4 — внутренний трубопровод СУГ; для шаблона ожидаем признак «lpg pipe», без TVS/open-air.
+            p_dict["has_lpg_pipe"] = bool(code == "POUO4")
+
         # Если передан doc — подцепляем картинки как InlineImage
         if doc is not None:
-            p_dict["tvs_dp_chart_img"] = _safe_inline_image(doc, tvs_dp_path, width_mm=150)
-            p_dict["tvs_imp_chart_img"] = _safe_inline_image(doc, tvs_imp_path, width_mm=150)
+            if not is_indoor_pipe_scenario:
+                p_dict["tvs_dp_chart_img"] = _safe_inline_image(doc, tvs_dp_path, width_mm=150)
+                p_dict["tvs_imp_chart_img"] = _safe_inline_image(doc, tvs_imp_path, width_mm=150)
             p_dict["jetfire_chart_img"] = _safe_inline_image(doc, jetfire_path, width_mm=150)
             p_dict["fireball_chart_img"] = _safe_inline_image(doc, fireball_path, width_mm=150)
 
         ctx["pouos"].append(_dot_for_jinja(p_dict))
+        if code == "POUO3":
+            # Удобный верхнеуровневый блок для одиночного POUO3-шаблона.
+            ctx["indoor_explosion"] = _dot_for_jinja({
+                "delta_p": indoor_explosion_block.get("delta_p"),
+                "mass_cloud": indoor_explosion_block.get("mass_cloud"),
+                "mass_total": indoor_explosion_block.get("mass_total"),
+                "volume_free": indoor_explosion_block.get("volume_free"),
+                "section_title": indoor_explosion_block.get("section_title"),
+                "conclusion": indoor_explosion_block.get("conclusion"),
+            })
+            fb_params_pouo3 = {
+                "m_kg": fireball_block.get("m_kg"),
+                "Ds_m": fireball_block.get("Ds_m"),
+                "H_m": fireball_block.get("H_m"),
+                "ts_s": fireball_block.get("ts_s"),
+                "Ef_kw_m2": fireball_block.get("Ef_kw_m2"),
+                "radiation_table": fireball_block.get("radiation_table", []),
+                "damage_zones": fireball_block.get("damage_zones", []),
+            }
+            ctx["fireball_params"] = _dot_for_jinja(fb_params_pouo3)
+            ctx["pouo3"] = _dot_for_jinja({
+                "section_1_title": "8.1 Взрыв в помещении",
+                "section_2_title": "8.2 Огненный шар",
+                "section_3_title": "8.3 Факельное горение",
+                "release": {
+                    "m_dot_kg_s": release_block.get("m_dot_kg_s"),
+                    "mass_cloud": indoor_explosion_block.get("mass_cloud"),
+                    "mass_total": indoor_explosion_block.get("mass_total"),
+                },
+                "indoor_explosion": indoor_explosion_block,
+                "fireball": {
+                    **fireball_block,
+                    "mass_label": "Масса горючего облака",
+                    "note": "Расчёт носит оценочный характер.",
+                },
+                "jet_fire": {
+                    "skip_reason": "Расчёт не производится ввиду малой длительности процесса.",
+                },
+            })
+        if code == "POUO4":
+            # Удобные верхнеуровневые блоки для одиночного POUO4-шаблона.
+            indoor_context = {
+                "delta_p": indoor_explosion_block.get("delta_p"),
+                "mass_total": indoor_explosion_block.get("mass_total"),
+                "mass_cloud": indoor_explosion_block.get("mass_cloud"),
+                "volume_free": indoor_explosion_block.get("volume_free"),
+                "rho_gas": indoor_explosion_block.get("rho_gas"),
+                "conclusion": indoor_explosion_block.get("conclusion"),
+            }
+            fireball_params = {
+                "m_kg": fireball_block.get("m_kg"),
+                "Ds_m": fireball_block.get("Ds_m"),
+                "H_m": fireball_block.get("H_m"),
+                "ts_s": fireball_block.get("ts_s"),
+                "Ef_kw_m2": fireball_block.get("Ef_kw_m2"),
+                "radiation_table": fireball_block.get("radiation_table", []),
+                "damage_zones": fireball_block.get("damage_zones", []),
+            }
+            ctx["indoor_explosion"] = _dot_for_jinja(indoor_context)
+            ctx["fireball_params"] = _dot_for_jinja(fireball_params)
+            ctx["jet_fire"] = _dot_for_jinja({
+                "skipped": True,
+                "reason": jetfire_block.get(
+                    "reason",
+                    "Расчёт не выполняется из-за малой длительности процесса до срабатывания отсечки.",
+                ),
+            })
+            ctx["pouo4"] = _dot_for_jinja({
+                "section_1_title": (
+                    "9.1 Расчёт параметров волны давления при разрыве газопровода "
+                    "в замкнутом пространстве"
+                ),
+                "section_2_title": "9.2 Прогнозирование зоны поражения тепловым излучением «огненного шара»",
+                "section_3_title": "9.3 Прогнозирование зоны поражения тепловым излучением факельного горения",
+                "release": {
+                    "m_dot_kg_s": release_block.get("m_dot_kg_s"),
+                    "mass_total": indoor_explosion_block.get("mass_total"),
+                    "mass_cloud": indoor_explosion_block.get("mass_cloud"),
+                    "rho_gas": indoor_explosion_block.get("rho_gas"),
+                },
+                "indoor_explosion": indoor_explosion_block,
+                "fireball": {
+                    **fireball_block,
+                    "mass_label": "Полная масса выброса Mg",
+                    "mass_basis": "Mg",
+                    "note": (
+                        fireball_block.get("note")
+                        or "Для соответствия шаблону POUO4 расчёт огненного шара выполнен по полной массе выброса Mg."
+                    ),
+                },
+                "jet_fire": {
+                    "skipped": True,
+                    "reason": jetfire_block.get("reason", jetfire_block.get("skip_reason")),
+                },
+            })
 
     return ctx
 

@@ -36,6 +36,28 @@ class EngineConfig:
     beta_natgas: float = 1.14           # коэффициент участия энергии
     eud0_base_j_per_kg: float = 44e6   # удельная теплота сгорания, Дж/кг
 
+    # ── POUO3: взрыв природного газа в помещении ─────────────────────────────
+    indoor_natgas_Pmax_kPa: float = 900.0
+    indoor_natgas_P0_kPa: float = 101.0
+    indoor_natgas_Kn: float = 3.0
+    # Значение принято по templatePOUO3.docx; при наличии паспортных данных
+    # его можно переопределить через inputs["C_st_percent"].
+    indoor_natgas_C_st_percent: float = 6.2
+
+    # ── POUO4: внутренний трубопровод СУГ ────────────────────────────────────
+    indoor_lpg_Pmax_kPa: float = 900.0
+    indoor_lpg_P0_kPa: float = 101.0
+    indoor_lpg_Kn: float = 3.0
+    indoor_lpg_V_free_m3: float = 611.0
+    # Значение подобрано под templatePOUO4.docx для формулы без повторного Z:
+    # Mg=0.672 кг, m_cloud=0.336 кг, rho=1.833 кг/м³ -> ΔP≈0.514 кПа.
+    indoor_lpg_C_st_percent: float = 15.55
+    indoor_lpg_molar_mass_kg_kmol: float = 44.096
+    indoor_lpg_V0_m3_kmol: float = 22.413
+    indoor_lpg_calc_temp_C: float = 20.0
+    indoor_lpg_rho_pipe_kg_m3: float = 0.7
+    indoor_lpg_Ef_fireball_kw_m2: float = 80.0
+
     # ── Резервуарный парк (общее) ─────────────────────────────────────────────
     # Коэффициент участия массы в облаке ТВС (открытая площадка, жидкое горючее)
     # Источник: РД 03-409-01, Табл.1

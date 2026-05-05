@@ -249,6 +249,214 @@ def _build_jet_fire_inputs(
     return {"m_dot_kg_s": float(accumulated.get("m_dot_kg_s", 0.0) or 0.0)}
 
 
+def _build_pouo3_indoor_natgas_inputs(
+    pouo: POUOInput,
+    cfg: EngineConfig,
+    accumulated: dict,
+) -> Dict[str, Any]:
+    """POUO3: природный газ среднего давления в помещении."""
+    acc = _select_accident_pipe(pouo.pipes)
+    if acc is None:
+        raise ValueError("POUO3: нет труб для расчёта.")
+
+    d_m = float(acc.diameter_mm) / 1000.0
+    if d_m <= 0:
+        raise ValueError("POUO3: некорректный диаметр аварийного участка.")
+
+    p_pipe = float(getattr(acc, "pressure_kpa", 0.0) or 0.0)
+    P_up_kpa = p_pipe if p_pipe > 0 else float(pouo.inputs.get("P0_kpa", 0.0) or 0.0)
+    t_shutoff_s = float(pouo.inputs.get("t_shutoff_s", 0.0) or 0.0)
+    V_free_m3 = float(pouo.inputs.get("V_free_m3", pouo.inputs.get("V_room_m3", 0.0)) or 0.0)
+
+    if P_up_kpa <= 0:
+        raise ValueError("POUO3: необходимо задать P0_kpa или pressure_kpa аварийного участка.")
+    if t_shutoff_s <= 0:
+        raise ValueError("POUO3: необходимо задать t_shutoff_s.")
+    if V_free_m3 <= 0:
+        raise ValueError("POUO3: необходимо задать V_room_m3 или V_free_m3.")
+
+    pipes_data = []
+    for pr in pouo.pipes:
+        d_inner_m = float(pr.diameter_mm) / 1000.0
+        length_m = float(pr.length_m)
+        if d_inner_m <= 0 or length_m <= 0:
+            raise ValueError("POUO3: все участки должны иметь diameter_mm > 0 и length_m > 0.")
+        pipes_data.append({
+            "name": pr.name,
+            "r_m": d_inner_m / 2.0,
+            "L_m": length_m,
+            "diameter_mm": float(pr.diameter_mm),
+            "length_m": length_m,
+            "is_accident": bool(getattr(pr, "is_accident", False)),
+        })
+
+    return {
+        "meta": {"scenario_id": f"INDOOR_NATGAS_{pouo.code}", "notes": pouo.title},
+        "release": {
+            "orifice_d_m": d_m,
+            "mu": float(pouo.inputs.get("mu_orifice", cfg.mu_orifice) or cfg.mu_orifice),
+            "psi": float(pouo.inputs.get("psi_critical", cfg.psi_critical) or cfg.psi_critical),
+            "Pg_Pa": P_up_kpa * 1000.0,
+            "T_K": float(pouo.inputs.get("T_K", cfg.T_gas_K) or cfg.T_gas_K),
+            "R0_J_kgK": float(pouo.inputs.get("R0_J_kgK", cfg.R0_natgas) or cfg.R0_natgas),
+            "t_shutoff_s": t_shutoff_s,
+        },
+        "isolated_section": {"P2_kPa": P_up_kpa, "pipes": pipes_data},
+        "substance": {
+            "rho_gas_kg_m3": float(pouo.inputs.get("rho_gas_kg_m3", cfg.rho_natgas_n) or cfg.rho_natgas_n),
+        },
+        "cloud": {
+            "Z": float(pouo.inputs.get("Z", cfg.Z_cloud) or cfg.Z_cloud),
+            "cloud_model": "indoor",
+        },
+        "room": {
+            "V_free_m3": V_free_m3,
+            "Pmax_kPa": float(pouo.inputs.get("Pmax_kPa", cfg.indoor_natgas_Pmax_kPa) or cfg.indoor_natgas_Pmax_kPa),
+            "P0_kPa": float(pouo.inputs.get("P_atm_kPa", cfg.indoor_natgas_P0_kPa) or cfg.indoor_natgas_P0_kPa),
+            "Kn": float(pouo.inputs.get("Kn", cfg.indoor_natgas_Kn) or cfg.indoor_natgas_Kn),
+            "C_st_percent": float(
+                pouo.inputs.get("C_st_percent", cfg.indoor_natgas_C_st_percent)
+                or cfg.indoor_natgas_C_st_percent
+            ),
+        },
+    }
+
+
+def _build_pouo4_indoor_lpg_inputs(
+    pouo: POUOInput,
+    cfg: EngineConfig,
+    accumulated: dict,
+) -> Dict[str, Any]:
+    """POUO4: внутренний трубопровод СУГ в помещении."""
+    acc = _select_accident_pipe(pouo.pipes)
+    if acc is None:
+        raise ValueError("POUO4: нет труб для расчёта.")
+
+    d_m = float(acc.diameter_mm) / 1000.0
+    if d_m <= 0:
+        raise ValueError("POUO4: некорректный диаметр аварийного участка.")
+
+    p_pipe = float(getattr(acc, "pressure_kpa", 0.0) or 0.0)
+    P_up_kpa = p_pipe if p_pipe > 0 else float(pouo.inputs.get("P0_kpa", 0.0) or 0.0)
+    t_shutoff_s = float(pouo.inputs.get("t_shutoff_s", 0.0) or 0.0)
+    V_free_m3 = float(
+        pouo.inputs.get(
+            "V_free_m3",
+            pouo.inputs.get("V_room_m3", cfg.indoor_lpg_V_free_m3),
+        )
+        or cfg.indoor_lpg_V_free_m3
+    )
+
+    if P_up_kpa <= 0:
+        raise ValueError("POUO4: необходимо задать P0_kpa или pressure_kpa аварийного участка.")
+    if t_shutoff_s <= 0:
+        raise ValueError("POUO4: необходимо задать t_shutoff_s.")
+    if V_free_m3 <= 0:
+        raise ValueError("POUO4: необходимо задать V_room_m3 или V_free_m3.")
+
+    pipes_data = []
+    for pr in pouo.pipes:
+        d_inner_m = float(pr.diameter_mm) / 1000.0
+        length_m = float(pr.length_m)
+        if d_inner_m <= 0 or length_m <= 0:
+            raise ValueError("POUO4: все участки должны иметь diameter_mm > 0 и length_m > 0.")
+        pipes_data.append({
+            "name": pr.name,
+            "r_m": d_inner_m / 2.0,
+            "L_m": length_m,
+            "diameter_mm": float(pr.diameter_mm),
+            "length_m": length_m,
+            "is_accident": bool(getattr(pr, "is_accident", False)),
+        })
+
+    lpg_input = pouo.inputs.get("lpg", {}) or {}
+    molar_mass = float(
+        lpg_input.get("molar_mass_kg_kmol", cfg.indoor_lpg_molar_mass_kg_kmol)
+        or cfg.indoor_lpg_molar_mass_kg_kmol
+    )
+    V0 = float(lpg_input.get("V0_m3_kmol", cfg.indoor_lpg_V0_m3_kmol) or cfg.indoor_lpg_V0_m3_kmol)
+    tp_C = float(lpg_input.get("tp_C", cfg.indoor_lpg_calc_temp_C) or cfg.indoor_lpg_calc_temp_C)
+    if molar_mass <= 0 or V0 <= 0:
+        raise ValueError("POUO4: molar_mass_kg_kmol и V0_m3_kmol должны быть > 0.")
+
+    rho_lpg_gas = molar_mass / (V0 * (1.0 + 0.00366 * tp_C))
+    R0_lpg = 8314.462618 / molar_mass
+
+    return {
+        "meta": {"scenario_id": f"INDOOR_LPG_{pouo.code}", "notes": pouo.title},
+        "release": {
+            "orifice_d_m": d_m,
+            "mu": float(pouo.inputs.get("mu_orifice", cfg.mu_orifice) or cfg.mu_orifice),
+            "psi": float(pouo.inputs.get("psi_critical", cfg.psi_critical) or cfg.psi_critical),
+            "Pg_Pa": P_up_kpa * 1000.0,
+            "T_K": float(pouo.inputs.get("T_K", cfg.T_gas_K) or cfg.T_gas_K),
+            "R0_J_kgK": float(pouo.inputs.get("R0_J_kgK", R0_lpg) or R0_lpg),
+            "t_shutoff_s": t_shutoff_s,
+        },
+        "isolated_section": {"P2_kPa": P_up_kpa, "pipes": pipes_data},
+        "substance": {
+            "rho_gas_kg_m3": float(
+                lpg_input.get("rho_lpg_gas_kg_m3", pouo.inputs.get("rho_lpg_gas_kg_m3", rho_lpg_gas))
+                or rho_lpg_gas
+            ),
+            # В templatePOUO4.docx масса после отсечки считается как 0.381*0.7.
+            "rho_pipe_kg_m3": float(
+                lpg_input.get("rho_pipe_kg_m3", pouo.inputs.get("rho_pipe_kg_m3", cfg.indoor_lpg_rho_pipe_kg_m3))
+                or cfg.indoor_lpg_rho_pipe_kg_m3
+            ),
+            "molar_mass_kg_kmol": molar_mass,
+            "V0_m3_kmol": V0,
+            "tp_C": tp_C,
+        },
+        "cloud": {
+            "Z": float(pouo.inputs.get("Z", cfg.Z_cloud) or cfg.Z_cloud),
+            "cloud_model": "indoor_lpg",
+        },
+        "room": {
+            "V_free_m3": V_free_m3,
+            "Pmax_kPa": float(pouo.inputs.get("Pmax_kPa", cfg.indoor_lpg_Pmax_kPa) or cfg.indoor_lpg_Pmax_kPa),
+            "P0_kPa": float(pouo.inputs.get("P_atm_kPa", cfg.indoor_lpg_P0_kPa) or cfg.indoor_lpg_P0_kPa),
+            "Kn": float(pouo.inputs.get("Kn", cfg.indoor_lpg_Kn) or cfg.indoor_lpg_Kn),
+            "C_st_percent": float(
+                lpg_input.get("C_st_percent", pouo.inputs.get("C_st_percent", cfg.indoor_lpg_C_st_percent))
+                or cfg.indoor_lpg_C_st_percent
+            ),
+        },
+    }
+
+
+def _build_pouo3_jet_fire_stub_inputs(
+    pouo: POUOInput,
+    cfg: EngineConfig,
+    accumulated: dict,
+) -> Dict[str, Any]:
+    duration_s = float(pouo.inputs.get("t_shutoff_s", 0.0) or 0.0)
+    return {
+        "m_dot_kg_s": float(accumulated.get("m_dot_kg_s", 0.0) or 0.0),
+        "duration_s": duration_s,
+        "skip_reason": (
+            "При струйном истечении сжатого природного газа факельное горение для POUO3 "
+            "не рассчитывается: расчётная длительность процесса мала до срабатывания отсечки."
+        ),
+    }
+
+
+def _build_pouo4_jet_fire_stub_inputs(
+    pouo: POUOInput,
+    cfg: EngineConfig,
+    accumulated: dict,
+) -> Dict[str, Any]:
+    duration_s = float(pouo.inputs.get("t_shutoff_s", 0.0) or 0.0)
+    return {
+        "m_dot_kg_s": float(accumulated.get("m_dot_kg_s", 0.0) or 0.0),
+        "duration_s": duration_s,
+        "skip_reason": (
+            "Расчёт факельного горения для POUO4 не выполняется из-за малой длительности "
+            "процесса до срабатывания отсечки."
+        ),
+    }
+
+
 def _build_lpg_pipe_jet_fire_inputs(
     pouo: POUOInput,
     cfg: EngineConfig,
@@ -277,6 +485,33 @@ def _build_fireball_inputs(
     Нет прямой зависимости от TVSExplosionScenario.
     """
     return {"m_kg": float(accumulated.get("Mg_kg", 0.0) or 0.0)}
+
+
+def _build_pouo3_fireball_inputs(
+    pouo: POUOInput,
+    cfg: EngineConfig,
+    accumulated: dict,
+) -> Dict[str, Any]:
+    """POUO3: огненный шар считается по массе облака, участвующей во взрыве."""
+    return {"m_kg": float(accumulated.get("m_cloud_kg", 0.0) or 0.0)}
+
+
+def _build_pouo4_fireball_inputs(
+    pouo: POUOInput,
+    cfg: EngineConfig,
+    accumulated: dict,
+) -> Dict[str, Any]:
+    """POUO4: огненный шар считается по полной массе выброса Mg."""
+    lpg_input = pouo.inputs.get("lpg", {}) or {}
+    return {
+        "m_kg": float(accumulated.get("Mg_kg", 0.0) or 0.0),
+        "Ef_kw_m2": float(
+            lpg_input.get("Ef_fireball_kw_m2", cfg.indoor_lpg_Ef_fireball_kw_m2)
+            or cfg.indoor_lpg_Ef_fireball_kw_m2
+        ),
+        "mass_basis": "Mg",
+        "note": "Для соответствия шаблону POUO4 расчёт огненного шара выполнен по полной массе выброса Mg.",
+    }
 
 
 def _build_lpg_pipe_fireball_inputs(
@@ -322,6 +557,68 @@ def natgas_outdoor_scenarios() -> List[ScenarioConfig]:
             "fireball",
             _build_fireball_inputs,
             requires=frozenset({"Mg_kg"}),
+            provides=frozenset(),
+        ),
+    ]
+
+
+def natgas_indoor_pouo3_scenarios() -> List[ScenarioConfig]:
+    """
+    Рецепт POUO3: природный газ среднего давления в помещении.
+
+    Цепочка соответствует templatePOUO3.docx:
+      8.1 расход/масса/избыточное давление в помещении,
+      8.2 огненный шар по массе облака m_cloud,
+      8.3 факельное горение как методическая заглушка.
+    """
+    return [
+        ScenarioConfig(
+            "indoor_natgas",
+            _build_pouo3_indoor_natgas_inputs,
+            requires=frozenset(),
+            provides=frozenset({"m_dot_kg_s", "Mg_kg", "m_cloud_kg"}),
+        ),
+        ScenarioConfig(
+            "fireball",
+            _build_pouo3_fireball_inputs,
+            requires=frozenset({"m_cloud_kg"}),
+            provides=frozenset(),
+        ),
+        ScenarioConfig(
+            "jet_fire_stub",
+            _build_pouo3_jet_fire_stub_inputs,
+            requires=frozenset({"m_dot_kg_s"}),
+            provides=frozenset(),
+        ),
+    ]
+
+
+def lpg_indoor_pouo4_scenarios() -> List[ScenarioConfig]:
+    """
+    Рецепт POUO4: внутренний трубопровод СУГ.
+
+    Цепочка соответствует templatePOUO4.docx:
+      9.1 расход/масса/избыточное давление в помещении,
+      9.2 огненный шар по полной массе Mg,
+      9.3 факельное горение как методическая заглушка.
+    """
+    return [
+        ScenarioConfig(
+            "indoor_lpg",
+            _build_pouo4_indoor_lpg_inputs,
+            requires=frozenset(),
+            provides=frozenset({"m_dot_kg_s", "Mg_kg", "m_cloud_kg"}),
+        ),
+        ScenarioConfig(
+            "fireball",
+            _build_pouo4_fireball_inputs,
+            requires=frozenset({"Mg_kg"}),
+            provides=frozenset(),
+        ),
+        ScenarioConfig(
+            "lpg_jet_fire_stub",
+            _build_pouo4_jet_fire_stub_inputs,
+            requires=frozenset({"m_dot_kg_s"}),
             provides=frozenset(),
         ),
     ]
@@ -539,14 +836,22 @@ def get_recipe(
 
     Приоритет проверок:
       1. scenario_code == "POUO1"  → резервуарный парк
-      2. scenario_code == "POUO6"  → СУГ, наружные трубопроводы
-      3. outdoor natgas            → трубопроводный газ
-      4. всё остальное             → пустой список (заглушка)
+      2. scenario_code == "POUO3"  → природный газ в помещении
+      3. scenario_code == "POUO4"  → СУГ в помещении
+      4. scenario_code == "POUO6"  → СУГ, наружные трубопроводы
+      5. outdoor natgas            → трубопроводный газ
+      6. всё остальное             → пустой список (заглушка)
     """
     fuel_norm = normalize_fuel_id(fuel_id)
 
     if scenario_code == "POUO1":
         return tank_park_scenarios()
+
+    if scenario_code == "POUO3" and is_indoor and fuel_norm == "natgas":
+        return natgas_indoor_pouo3_scenarios()
+
+    if scenario_code == "POUO4" and is_indoor and fuel_norm == "lpg":
+        return lpg_indoor_pouo4_scenarios()
 
     if scenario_code == "POUO6" and not is_indoor and fuel_norm == "lpg":
         return lpg_outdoor_pipe_scenarios()
